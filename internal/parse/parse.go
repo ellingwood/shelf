@@ -37,6 +37,9 @@ var (
 	reEpNums  = regexp.MustCompile(`\d{1,3}`)
 
 	reYear = regexp.MustCompile(`\b(19[2-9]\d|20[0-4]\d)\b`)
+
+	// Jellyfin/Plex-style database tags: "[tmdbid-603]", "{tmdb-603}".
+	reTMDBTag = regexp.MustCompile(`(?i)[\[{]\s*tmdb(?:id)?[-=](\d+)\s*[\]}]`)
 )
 
 // Technical markers. Every match marks where the title ends.
@@ -99,6 +102,11 @@ func Name(base string) media.Media {
 	if ext := filepath.Ext(base); media.IsVideo(ext) || media.IsSubtitle(ext) {
 		m.Ext = strings.ToLower(ext)
 		stem = strings.TrimSuffix(base, ext)
+	}
+
+	if sm := reTMDBTag.FindStringSubmatch(stem); sm != nil {
+		m.TMDBID, _ = strconv.Atoi(sm[1])
+		stem = reTMDBTag.ReplaceAllString(stem, " ")
 	}
 
 	s := normalize(stem)
@@ -216,19 +224,25 @@ func Path(path, root string) media.Media {
 	switch m.Kind {
 	case media.Episode:
 		for _, d := range dirs {
-			if m.Show != "" {
-				break
-			}
 			if isSeasonDir(d) {
 				continue
 			}
 			pm := Name(d)
-			if pm.Title != "" {
-				m.Show, m.Title = pm.Title, pm.Title
-				if m.ShowYear == 0 {
-					m.ShowYear, m.Year = pm.Year, pm.Year
-				}
+			if pm.Title == "" {
+				continue
 			}
+			if m.Show == "" {
+				m.Show, m.Title = pm.Title, pm.Title
+			} else if !SameTitle(m.Show, pm.Title) {
+				break // folder is about something else; ignore it
+			}
+			if m.ShowYear == 0 {
+				m.ShowYear, m.Year = pm.Year, pm.Year
+			}
+			if m.TMDBID == 0 {
+				m.TMDBID = pm.TMDBID
+			}
+			break
 		}
 	default:
 		// Season dir + bare "E02"/"Episode 2" filename.
@@ -249,6 +263,12 @@ func Path(path, root string) media.Media {
 					}
 					return m
 				}
+			}
+		}
+		// Movie: an ID tag on the movie's own folder applies to the file.
+		if m.TMDBID == 0 && len(dirs) > 0 {
+			if pm := Name(dirs[0]); pm.TMDBID != 0 && SameTitle(pm.Title, m.Title) {
+				m.TMDBID = pm.TMDBID
 			}
 		}
 		// Movie: if the filename gave no year but the folder does, trust the folder.
@@ -375,8 +395,11 @@ func cleanTitle(s string) string {
 	s = strings.TrimSpace(s)
 	s = strings.Trim(s, " -–—:,")
 	s = reSpaces.ReplaceAllString(s, " ")
-	// All-lowercase or all-uppercase names get title-cased; mixed case is kept.
-	if s != "" && (s == strings.ToLower(s) || s == strings.ToUpper(s)) {
+	// All-lowercase names get title-cased, as do multi-word all-caps names
+	// ("THE MATRIX"). Single all-caps words ("FROM", "NCIS") are often the
+	// real title, and mixed case is kept as-is.
+	allCaps := s == strings.ToUpper(s) && strings.Contains(s, " ")
+	if s != "" && (s == strings.ToLower(s) || allCaps) {
 		s = TitleCase(s)
 	}
 	return s
@@ -422,4 +445,18 @@ func parentDirs(path, root string, n int) []string {
 		dir = filepath.Dir(dir)
 	}
 	return out
+}
+
+// SameTitle compares titles ignoring case, punctuation and a leading "The".
+func SameTitle(a, b string) bool {
+	norm := func(s string) string {
+		var out []rune
+		for _, r := range strings.ToLower(s) {
+			if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r > 127 {
+				out = append(out, r)
+			}
+		}
+		return strings.TrimPrefix(string(out), "the")
+	}
+	return a != "" && norm(a) == norm(b)
 }

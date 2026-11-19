@@ -32,6 +32,8 @@ func TestName(t *testing.T) {
 		{"Back.to.the.Future.1985.mkv", media.Media{Kind: media.Movie, Title: "Back to the Future", Year: 1985}},
 		{"Lost.in.Translation.2003.720p.mkv", media.Media{Kind: media.Movie, Title: "Lost in Translation", Year: 2003, Resolution: "720p"}},
 		{"Me.Before.You.2016.mkv", media.Media{Kind: media.Movie, Title: "Me Before You", Year: 2016}},
+		{"The Matrix (1999) [tmdbid-603].mkv", media.Media{Kind: media.Movie, Title: "The Matrix", Year: 1999, TMDBID: 603}},
+		{"The Matrix {tmdb-603}.mkv", media.Media{Kind: media.Movie, Title: "The Matrix", TMDBID: 603}},
 		{"Inception.mkv", media.Media{Kind: media.Movie, Title: "Inception"}},
 
 		{"Breaking.Bad.S01E02.Cats.in.the.Bag.720p.WEB-DL.x264.mkv", media.Media{Kind: media.Episode, Show: "Breaking Bad", Season: 1, Episode: 2, Episodes: []int{2}, EpisodeTitle: "Cats in the Bag", Resolution: "720p", Source: "WEB-DL", VideoCodec: "x264"}},
@@ -68,6 +70,12 @@ func TestPath(t *testing.T) {
 		{"/in/The Wire (2002)/Season 02/Episode 4.mkv", "/in", media.Media{Kind: media.Episode, Show: "The Wire", ShowYear: 2002, Season: 2, Episode: 4, Episodes: []int{4}}},
 		{"/in/Heat (1995)/heat.1080p.mkv", "/in", media.Media{Kind: media.Movie, Title: "Heat", Year: 1995, Resolution: "1080p"}},
 		{"/in/Some.Movie.2010.1080p.BluRay/abc-somemovie-1080p.mkv", "/in", media.Media{Kind: media.Movie, Title: "Some Movie", Year: 2010, Resolution: "1080p", Source: "BluRay"}},
+		// Library layouts: year and TMDB ID come from the folder.
+		{"/lib/Shows/FROM (2022)/Season 04/FROM S04E01.mp4", "/lib", media.Media{Kind: media.Episode, Show: "FROM", ShowYear: 2022, Season: 4, Episode: 1, Episodes: []int{1}}},
+		{"/lib/Shows/VisionQuest (2026) [tmdbid-213375]/Season 01/VisionQuest S01E06 - Deadlock.mp4", "/lib", media.Media{Kind: media.Episode, Show: "VisionQuest", ShowYear: 2026, TMDBID: 213375, Season: 1, Episode: 6, Episodes: []int{6}, EpisodeTitle: "Deadlock"}},
+		{"/lib/Movies/Heat (1995) [tmdbid-949]/Heat (1995).mkv", "/lib", media.Media{Kind: media.Movie, Title: "Heat", Year: 1995, TMDBID: 949}},
+		// A folder about a different show must not lend its year/ID.
+		{"/lib/Misc (2001) [tmdbid-1]/Lost S01E01.mkv", "/lib", media.Media{Kind: media.Episode, Show: "Lost", Season: 1, Episode: 1, Episodes: []int{1}}},
 		// Never climb to or above the root.
 		{"/in/S01E03.mkv", "/in", media.Media{Kind: media.Episode, Season: 1, Episode: 3, Episodes: []int{3}}},
 	}
@@ -82,6 +90,9 @@ func check(t *testing.T, got, want media.Media) {
 	t.Helper()
 	if got.Kind != want.Kind {
 		t.Errorf("Kind = %v, want %v", got.Kind, want.Kind)
+	}
+	if got.TMDBID != want.TMDBID {
+		t.Errorf("TMDBID = %d, want %d", got.TMDBID, want.TMDBID)
 	}
 	if want.Kind == media.Movie && got.Title != want.Title {
 		t.Errorf("Title = %q, want %q", got.Title, want.Title)

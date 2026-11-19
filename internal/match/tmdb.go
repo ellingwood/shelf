@@ -24,6 +24,8 @@ import (
 // ErrNoMatch means TMDB had no result above the confidence threshold.
 var ErrNoMatch = errors.New("no confident TMDB match")
 
+var errNotFound = errors.New("not found")
+
 type Client struct {
 	key, lang     string
 	MinConfidence float64
@@ -89,6 +91,21 @@ func (c *Client) Enrich(ctx context.Context, m *media.Media) (*Candidate, error)
 }
 
 func (c *Client) enrichMovie(ctx context.Context, m *media.Media) (*Candidate, error) {
+	if m.TMDBID != 0 {
+		var r movieResult
+		err := c.get(ctx, fmt.Sprintf("/movie/%d", m.TMDBID), nil, &r)
+		if err == nil && r.ID != 0 {
+			m.Title = r.Title
+			if y := yearOf(r.ReleaseDate); y != 0 {
+				m.Year = y
+			}
+			return &Candidate{ID: r.ID, Title: r.Title, Year: yearOf(r.ReleaseDate), Score: 1}, nil
+		}
+		if !errors.Is(err, errNotFound) && err != nil {
+			return nil, err
+		}
+		m.TMDBID = 0 // stale/wrong ID: fall back to searching
+	}
 	if m.Title == "" {
 		return nil, ErrNoMatch
 	}
@@ -131,10 +148,22 @@ func (c *Client) enrichMovie(ctx context.Context, m *media.Media) (*Candidate, e
 }
 
 func (c *Client) enrichEpisode(ctx context.Context, m *media.Media) (*Candidate, error) {
+	var best *Candidate
+	if m.TMDBID != 0 {
+		var r tvResult
+		err := c.get(ctx, fmt.Sprintf("/tv/%d", m.TMDBID), nil, &r)
+		if err == nil && r.ID != 0 {
+			best = &Candidate{ID: r.ID, Title: r.Name, Year: yearOf(r.FirstAirDate), Score: 1}
+			return best, c.applyShow(ctx, m, best)
+		}
+		if !errors.Is(err, errNotFound) && err != nil {
+			return nil, err
+		}
+		m.TMDBID = 0
+	}
 	if m.Show == "" {
 		return nil, ErrNoMatch
 	}
-	var best *Candidate
 	attempts := []int{m.ShowYear}
 	if m.ShowYear != 0 {
 		attempts = append(attempts, 0)
@@ -165,6 +194,11 @@ func (c *Client) enrichEpisode(ctx context.Context, m *media.Media) (*Candidate,
 	if best == nil || best.Score < c.MinConfidence {
 		return best, ErrNoMatch
 	}
+	return best, c.applyShow(ctx, m, best)
+}
+
+// applyShow copies a matched show onto m and fetches the episode title.
+func (c *Client) applyShow(ctx context.Context, m *media.Media, best *Candidate) error {
 	m.Show, m.Title, m.TMDBID = best.Title, best.Title, best.ID
 	if best.Year != 0 {
 		m.ShowYear, m.Year = best.Year, best.Year
@@ -183,7 +217,7 @@ func (c *Client) enrichEpisode(ctx context.Context, m *media.Media) (*Candidate,
 			}
 		}
 	}
-	return best, nil
+	return nil
 }
 
 // stripPartSuffix turns "Pilot (1)" into "Pilot" for multi-episode files.
@@ -328,7 +362,7 @@ func (c *Client) get(ctx context.Context, path string, q url.Values, out any) er
 		case resp.StatusCode == http.StatusUnauthorized:
 			return fmt.Errorf("tmdb: unauthorized (check tmdb.api_key)")
 		case resp.StatusCode == http.StatusNotFound:
-			return fmt.Errorf("tmdb %s: not found", path)
+			return fmt.Errorf("tmdb %s: %w", path, errNotFound)
 		case resp.StatusCode != http.StatusOK:
 			return fmt.Errorf("tmdb %s: HTTP %d", path, resp.StatusCode)
 		}
