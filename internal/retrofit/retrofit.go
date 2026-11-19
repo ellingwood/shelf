@@ -51,6 +51,7 @@ type Plan struct {
 	Unmatched []Issue
 	Conflicts []Issue
 	Kept      []Issue
+	Identical [][]string // sets of videos with the same content
 	prune     map[string]bool
 }
 
@@ -66,7 +67,8 @@ func Build(ctx context.Context, p *pipeline.Pipeline, rule *config.Rule, opt Opt
 	root := filepath.Clean(rule.Output)
 	r := *rule
 	off := false
-	r.Subtitles = &off // retrofit moves sidecars generically, keeping their suffixes
+	r.Subtitles = &off       // retrofit moves sidecars generically, keeping their suffixes
+	r.CheckDuplicates = &off // identical files are reported below instead
 
 	files, err := collect(root, opt.Paths, rule.ReviewDir)
 	if err != nil {
@@ -98,6 +100,12 @@ func Build(ctx context.Context, p *pipeline.Pipeline, rule *config.Rule, opt Opt
 			continue
 		}
 		plans = append(plans, planned{pl, fi.Size()})
+	}
+
+	// 1a. Videos with identical content: renamed as usual (the names are
+	//     right, the content is wrong), but reported so they can be replaced.
+	if rule.WantDupeCheck() {
+		plan.Identical = p.Dupes.Groups(files)
 	}
 
 	// 1b. Copies of the same show/movie must end up together: if any file of
@@ -424,13 +432,34 @@ func (pl *Plan) Print(w io.Writer) {
 	section("Not matched — left in place", pl.Unmatched)
 	section("Conflicts — left in place (use -duplicates keep-larger to resolve)", pl.Conflicts)
 	section("Kept in place", pl.Kept)
+	if len(pl.Identical) > 0 {
+		fmt.Fprintf(w, "\nIdentical content — these files hold the same video; re-download all but the right one (%d set(s)):\n", len(pl.Identical))
+		for _, g := range pl.Identical {
+			for i, f := range g {
+				mark := "  ┌ "
+				switch {
+				case len(g) == 1:
+				case i == len(g)-1:
+					mark = "  └ "
+				case i > 0:
+					mark = "  │ "
+				}
+				fmt.Fprintf(w, "%s%s\n", mark, rel(pl.Root, f))
+			}
+		}
+	}
 
 	counts := map[string]int{}
 	for _, op := range pl.Ops {
 		counts[op.Kind]++
 	}
-	fmt.Fprintf(w, "\nSummary: %d video(s) to rename, %d sidecar(s), %d folder item(s), %d duplicate(s) set aside; %d already correct, %d unmatched, %d conflict(s).\n",
-		counts["video"], counts["sidecar"], counts["folder-item"], counts["duplicate"], pl.Unchanged, len(pl.Unmatched), len(pl.Conflicts))
+	fmt.Fprintf(w, "\nSummary: %d video(s) to rename, %d sidecar(s), %d folder item(s), %d duplicate(s) set aside; %d already correct, %d unmatched, %d conflict(s), %d identical-content set(s).\n",
+		counts["video"], counts["sidecar"], counts["folder-item"], counts["duplicate"], pl.Unchanged, len(pl.Unmatched), len(pl.Conflicts), len(pl.Identical))
+}
+
+// Collect lists the library videos Build would consider.
+func Collect(root string, paths []string, reviewDir string) ([]string, error) {
+	return collect(filepath.Clean(root), paths, reviewDir)
 }
 
 // collect finds library videos, skipping extras, trickplay and the review dir.

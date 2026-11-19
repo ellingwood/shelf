@@ -224,6 +224,8 @@ jellyfin:
 - **Drop files into the watch folder.** Browser downloads (`.crdownload`), `.part` files and anything still growing are ignored until they finish.
 - **Check the review folder now and then** (`/mnt/media/.shelf-review`). Files land there when TMDB isn't confident. Rename one more clearly (e.g. `Title (Year).mkv` or `Show S01E02.mkv`) and move it back into the watch folder.
 - **Subtitles** next to a video, or in `Subs/`, are moved along and renamed `.en.srt`, `.en.forced.srt`, `.en.sdh.srt`.
+- **"same video content as …" in the review folder** means the file holds the same bytes as a video already in the library. Usually the download helper grabbed the previous episode's stream again. Reload the page, clear the helper's detected-media list and download it again.
+- **Health check:** `shelf health` lists identical files, missing episodes, misnamed files and leftovers. Add `-probe` to catch truncated downloads.
 - **Upgrading quality:** set `conflict: keep-larger`, or use `preset: jellyfin-versions` to keep both versions.
 
 ---
@@ -236,6 +238,8 @@ If the library already holds media organized another way, or older shelf imports
 shelf retrofit | less
 shelf retrofit -apply           # then: shelf undo -last N to reverse
 ```
+
+The plan also lists videos with identical content (several episodes that are really one file). Re-download those, keeping only the one that is correct. When you put a replacement in the watch folder, either delete the bad copy first or set `conflict: overwrite` for that run, because the default `skip` leaves the existing file in place.
 
 See "Retrofitting an existing library" in the README for how duplicates, sidecars and artwork are handled.
 

@@ -70,7 +70,29 @@ type season struct {
 	Episodes []struct {
 		EpisodeNumber int    `json:"episode_number"`
 		Name          string `json:"name"`
+		AirDate       string `json:"air_date"`
 	} `json:"episodes"`
+}
+
+// Episode is one entry of a TMDB season listing.
+type Episode struct {
+	Number int
+	Name   string
+	Aired  time.Time // zero if TMDB has no air date
+}
+
+// SeasonEpisodes lists a season's episodes.
+func (c *Client) SeasonEpisodes(ctx context.Context, showID, seasonNum int) ([]Episode, error) {
+	var s season
+	if err := c.get(ctx, fmt.Sprintf("/tv/%d/season/%d", showID, seasonNum), nil, &s); err != nil {
+		return nil, err
+	}
+	out := make([]Episode, 0, len(s.Episodes))
+	for _, e := range s.Episodes {
+		aired, _ := time.Parse("2006-01-02", e.AirDate)
+		out = append(out, Episode{Number: e.EpisodeNumber, Name: strings.TrimSpace(e.Name), Aired: aired})
+	}
+	return out, nil
 }
 
 // Candidate is a scored search result, exposed for diagnostics.

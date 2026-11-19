@@ -44,12 +44,13 @@ make logs
 | `shelf rename [-dry-run] [-output DIR] [-action copy] paths…` | One-shot import of files/folders |
 | `shelf preview names…` | Show parsed fields, TMDB match and destination; touches nothing (files needn't exist) |
 | `shelf retrofit [-apply] [-duplicates keep-larger] [paths…]` | Re-organize an existing library in place: merge duplicate show/movie folders, add `[tmdbid-N]` tags and episode titles, carry sidecars and artwork along. Dry run unless `-apply` |
+| `shelf health [-probe] [paths…]` | Report library problems without changing anything: identical-content files, several files for one title, missing episodes, misnamed or unidentified files, unreadable files (`-probe`), interrupted-copy leftovers and empty folders. Exits 1 if anything is found |
 | `shelf history [-n 50]` | Recent operations |
 | `shelf undo [-last N \| -id ID] [-dry-run]` | Reverse operations (moves go back, copies/links are removed) |
 | `shelf check` | Validate config, check dirs/drive, test TMDB key, ffprobe and Jellyfin |
 | `shelf init` | Write a starter config |
 
-All commands take `-config PATH` and `-v` (debug logging). `watch`, `rename` and `preview` take `-offline` to skip TMDB.
+All commands take `-config PATH` and `-v` (debug logging). `watch`, `rename`, `preview`, `retrofit` and `health` take `-offline` to skip TMDB.
 
 ## How a file flows
 
@@ -58,6 +59,7 @@ All commands take `-config PATH` and `-v` (debug logging). `watch`, `rename` and
 3. **Match.** TMDB supplies the canonical title, year, ID and episode title. Year agreement settles same-name remakes. A match below `min_confidence` goes to the review folder (`on_no_match`). Responses are cached for 7 days in `~/.cache/shelf`.
 4. **Probe** (if `ffprobe` is found on `PATH`, in Jellyfin's bundle, or at the `ffprobe:` config path): real resolution, codecs and HDR/DV from the streams, overriding what the filename claims.
 5. **Render.** The Go template becomes the destination path. Each segment is sanitized (`:` → ` -`, no `?*<>|"`, no trailing dots) and `..` is rejected.
+   **Duplicate check** (`check_duplicates`, on by default): if a video elsewhere in the same library category (`Shows/`, `Movies/`) has the same content, the file goes to review instead, with the matching file named in the log. This catches a download helper saving one stream under several episode names. Files are compared by size and then by a SHA-256 of three 1 MiB samples (start, middle, end), so only same-size files are read, 3 MiB each. The file at the destination itself is not counted; replacing it is up to `conflict`.
 6. **Place.** `move` uses rename on the same filesystem. Across drives it copies to a hidden temp file, fsyncs, checks the size, renames into place and only then deletes the source. Subtitles come along renamed to Jellyfin's `.en.srt`, `.en.forced.srt` and `.en.sdh.srt` (from same-folder sidecars, `Subs/` and `Subs/<episode>/`). Empty source folders are removed.
 7. **Record and notify.** Each operation goes to `~/.local/state/shelf/history.jsonl` for `undo`. Jellyfin is told about new files through `/Library/Media/Updated`, debounced so a season pack sends one request.
 
@@ -106,7 +108,26 @@ shelf undo -last N                               # reverse it (N is printed afte
 - Sidecars named after a video move with it and keep their suffix: `.en.srt`, `.nfo`, `-thumb.jpg`, `.trickplay/`. Folder-level files (`poster.jpg`, `tvshow.nfo`, `season.nfo`, trailers) are merged into the new folder when the old one is being emptied. Anything whose name is already taken is left in place and listed.
 - Extras (`extras/`, `trailers/`, `*-trailer.mkv`, …) are never renamed as movies or episodes.
 - Files that can't be matched confidently are listed and left alone.
+- **Identical content:** videos holding the same bytes under different names (for example several episodes that all play one episode) are listed under "Identical content". They are still renamed, since the names are right, but you should re-download all of them except the correct one. Set `check_duplicates: false` on the rule to skip this.
 - **Duplicates:** when two files want the same name, the default `-duplicates skip` reports them and moves neither. `-duplicates keep-larger` keeps the larger file and moves the others to `<output>/.shelf-review/duplicates/`, preserving their old paths. Nothing is ever deleted.
+
+## Library health
+
+`shelf health` reads the library and changes nothing:
+
+```
+✗ Identical content (1 set(s)): these files hold the same video, so all but one are wrong. Re-download them.
+  ┌ Shows/FROM (2022) [tmdbid-124364]/Season 04/FROM S04E08 - Heavy Is the Head.mp4
+  └ Shows/FROM (2022) [tmdbid-124364]/Season 04/FROM S04E09 - The Calm Before.mp4
+
+! Missing episodes (1 season(s)):
+  Shows/Show (2020) [tmdbid-1], season 1: missing E03-E04  (have 6; aired on TMDB)
+```
+
+- **Missing episodes** are checked against TMDB's aired episodes when the show folder has a `[tmdbid-N]` tag. Otherwise shelf looks for holes between E01 and the highest episode you have. Season 0 (specials) is not checked.
+- **`-probe`** runs ffprobe on every video and flags files with no video stream or no duration, which usually means a truncated download. It reads only container headers, so it takes a fraction of a second per file.
+- Only the library folders that hold videos are searched, so Jellyfin's `metadata/` folder is ignored.
+- The exit status is 1 when problems are found. A weekly run could look like this: `0 9 * * 0 shelf health >/dev/null || notify-send "shelf: library problems"`.
 
 ## Notes
 
@@ -126,6 +147,9 @@ internal/probe/     ffprobe integration
 internal/naming/    Go template engine, presets, path sanitizing
 internal/fileops/   move/copy/link with cross-device safety and conflict policies
 internal/history/   JSONL operation log and undo
+internal/dupe/      identical-content detection (size + sampled SHA-256)
+internal/health/    read-only library report
+internal/retrofit/  re-organize an existing library in place
 internal/watch/     fsnotify watcher with stability detection
 internal/pipeline/  parse → match → probe → render → place → record → notify
 internal/jellyfin/  library refresh notifications

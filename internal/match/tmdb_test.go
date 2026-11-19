@@ -40,7 +40,7 @@ func fakeTMDB(t *testing.T) *httptest.Server {
 		case "/tv/1396":
 			w.Write([]byte(`{"id":1396,"name":"Breaking Bad","first_air_date":"2008-01-20"}`))
 		case "/tv/1396/season/1":
-			w.Write([]byte(`{"episodes":[{"episode_number":1,"name":"Pilot"},{"episode_number":2,"name":"Cat's in the Bag..."}]}`))
+			w.Write([]byte(`{"episodes":[{"episode_number":1,"name":"Pilot","air_date":"2008-01-20"},{"episode_number":2,"name":"Cat's in the Bag...","air_date":""}]}`))
 		default:
 			http.NotFound(w, r)
 		}
@@ -139,5 +139,17 @@ func TestLookupByID(t *testing.T) {
 	s := media.Media{Kind: media.Movie, Title: "The Matrix", Year: 1999, TMDBID: 999999}
 	if _, err := c.Enrich(context.Background(), &s); err != nil || s.TMDBID != 603 {
 		t.Errorf("stale id fallback: %v %+v", err, s)
+	}
+}
+
+func TestSeasonEpisodes(t *testing.T) {
+	srv := fakeTMDB(t)
+	defer srv.Close()
+	eps, err := client(srv).SeasonEpisodes(context.Background(), 1396, 1)
+	if err != nil || len(eps) != 2 {
+		t.Fatalf("eps=%v err=%v", eps, err)
+	}
+	if eps[0].Number != 1 || eps[0].Name != "Pilot" || eps[0].Aired.Year() != 2008 || !eps[1].Aired.IsZero() {
+		t.Errorf("eps = %+v", eps)
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 
@@ -180,4 +181,36 @@ func hdr(s stream) string {
 		return "HLG"
 	}
 	return ""
+}
+
+// Check reports whether ffprobe can read a playable video stream and a
+// duration from the file. It catches truncated or corrupt downloads.
+func Check(ctx context.Context, path string) error {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, Bin, "-v", "error", "-print_format", "json",
+		"-show_entries", "format=duration:stream=codec_type,disposition", path).Output()
+	if err != nil {
+		return fmt.Errorf("ffprobe cannot read the file (%v)", err)
+	}
+	var res struct {
+		Format  struct{ Duration string }
+		Streams []stream
+	}
+	if err := json.Unmarshal(out, &res); err != nil {
+		return fmt.Errorf("ffprobe output: %w", err)
+	}
+	hasVideo := false
+	for _, s := range res.Streams {
+		if s.CodecType == "video" && s.Disposition.AttachedPic == 0 {
+			hasVideo = true
+		}
+	}
+	if !hasVideo {
+		return fmt.Errorf("no video stream")
+	}
+	if d, _ := strconv.ParseFloat(res.Format.Duration, 64); d <= 0 {
+		return fmt.Errorf("no duration (truncated download?)")
+	}
+	return nil
 }

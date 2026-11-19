@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"shelf/internal/config"
+	"shelf/internal/dupe"
 	"shelf/internal/fileops"
 	"shelf/internal/history"
 	"shelf/internal/jellyfin"
@@ -36,6 +37,7 @@ type Pipeline struct {
 	DryRun bool
 	Out    io.Writer // where plans are printed (dry run / rename)
 	Probe  bool
+	Dupes  dupe.Cache
 
 	mu     sync.Mutex
 	failed map[string]time.Time // path → mtime of a deterministic failure
@@ -144,6 +146,13 @@ func (p *Pipeline) MakePlan(ctx context.Context, rule *config.Rule, path, root s
 			return plan, err
 		}
 		plan.Dst = filepath.Join(rule.Output, rel)
+		if rule.WantDupeCheck() && rule.Action != "hardlink" && rule.Action != "symlink" {
+			if other := p.findDuplicate(rule, path, plan.Dst); other != "" {
+				r, _ := filepath.Rel(rule.Output, other)
+				plan.Review, plan.Reason = true, "same video content as "+r
+				plan.Dst = filepath.Join(rule.ReviewDir, filepath.Base(path))
+			}
+		}
 	}
 
 	if rule.WantSubtitles() {
@@ -168,6 +177,27 @@ func (p *Pipeline) MakePlan(ctx context.Context, rule *config.Rule, path, root s
 		}
 	}
 	return plan, nil
+}
+
+// findDuplicate looks for a video with the same content as path in the
+// library category (e.g. Shows/) that dst goes into. The destination itself
+// is ignored: replacing a file with an identical copy is the conflict
+// policy's business.
+func (p *Pipeline) findDuplicate(rule *config.Rule, path, dst string) string {
+	rel, err := filepath.Rel(rule.Output, dst)
+	if err != nil || strings.HasPrefix(rel, "..") {
+		return ""
+	}
+	scope := rule.Output
+	if i := strings.IndexRune(rel, filepath.Separator); i > 0 {
+		scope = filepath.Join(rule.Output, rel[:i])
+	}
+	found, err := p.Dupes.FindIn(path, scope, dst)
+	if err != nil {
+		p.Log.Warn("duplicate check failed", "file", path, "err", err)
+		return ""
+	}
+	return found
 }
 
 // Process plans and executes one file.

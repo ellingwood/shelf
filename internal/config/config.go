@@ -75,6 +75,10 @@ type Rule struct {
 	Templates        naming.Templates `yaml:"templates"`
 	ReviewDir        string           `yaml:"review_dir"`
 	CleanupEmptyDirs *bool            `yaml:"cleanup_empty_dirs"`
+	// CheckDuplicates sends a file to review when the library already holds
+	// a video with identical content (e.g. a download helper that saved the
+	// same stream under several episode names).
+	CheckDuplicates *bool `yaml:"check_duplicates"`
 
 	renderer *naming.Renderer
 }
@@ -85,6 +89,7 @@ func (r *Rule) Renderer() *naming.Renderer { return r.renderer }
 func (r *Rule) IsRecursive() bool     { return r.Recursive == nil || *r.Recursive }
 func (r *Rule) WantSubtitles() bool   { return r.Subtitles == nil || *r.Subtitles }
 func (r *Rule) WantCleanupDirs() bool { return r.CleanupEmptyDirs == nil || *r.CleanupEmptyDirs }
+func (r *Rule) WantDupeCheck() bool   { return r.CheckDuplicates == nil || *r.CheckDuplicates }
 
 // MatchesExt reports whether a file extension (with dot) is handled by the rule.
 func (r *Rule) MatchesExt(ext string) bool {

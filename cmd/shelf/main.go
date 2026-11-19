@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"shelf/internal/config"
+	"shelf/internal/health"
 	"shelf/internal/history"
 	"shelf/internal/jellyfin"
 	"shelf/internal/match"
@@ -37,6 +38,7 @@ Usage:
   shelf rename  [flags] <paths...>   organize files/folders once
   shelf preview [flags] <names...>   show how names parse and where they'd go
   shelf retrofit [-apply] [paths...] re-organize an existing library in place
+  shelf health  [-probe] [paths...]  report library problems (duplicates, gaps...)
   shelf history [-n N]               list recent operations
   shelf undo    [-last N | -id ID]   reverse operations
   shelf check                        validate config and test TMDB/Jellyfin
@@ -68,6 +70,8 @@ func main() {
 		err = cmdPreview(ctx, args)
 	case "retrofit":
 		err = cmdRetrofit(ctx, args)
+	case "health":
+		err = cmdHealth(ctx, args)
 	case "history":
 		err = cmdHistory(args)
 	case "undo":
@@ -82,11 +86,18 @@ func main() {
 		fmt.Fprintf(os.Stderr, "unknown command %q\n\n"+usage, cmd, config.DefaultPath())
 		os.Exit(2)
 	}
+	if errors.Is(err, errProblems) {
+		os.Exit(1)
+	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
 	}
 }
+
+// errProblems makes a command exit with status 1 after it has already
+// reported why (e.g. health found problems).
+var errProblems = errors.New("problems found")
 
 type common struct {
 	fs      *flag.FlagSet
@@ -617,6 +628,8 @@ rules:
     type: auto                   # auto | movie | tv
     subtitles: true
     cleanup_empty_dirs: true
+    check_duplicates: true       # review files whose content matches a video
+                                 #   already in the library
     # extensions: [mkv, mp4]     # default: common video formats
     # templates:                 # override the preset with Go templates
     #   movie: '{{.Title | clean}} ({{.Year}})/{{.Title | clean}} ({{.Year}}) - {{.Resolution}}{{.Ext}}'
@@ -692,4 +705,61 @@ Flags:
 		}
 	}
 	return err
+}
+
+func cmdHealth(ctx context.Context, args []string) error {
+	f := newFlags("health")
+	offline := f.fs.Bool("offline", false, "don't query TMDB (no aired-episode check; names judged from files/folders)")
+	withProbe := f.fs.Bool("probe", false, "run ffprobe on every video to find unreadable/truncated files (slower)")
+	ruleName := f.fs.String("rule", "", "rule whose output library to check (default: first rule)")
+	f.fs.Usage = func() {
+		fmt.Fprintf(os.Stderr, `Usage: shelf health [flags] [paths inside the library...]
+
+Inspects the library and reports problems; changes nothing:
+  - videos with identical content (one stream saved under several names)
+  - several files for the same episode or movie
+  - missing episodes (aired per TMDB, or gaps in the numbering)
+  - names that don't follow the templates (fix with shelf retrofit)
+  - unidentifiable, empty or (with -probe) unreadable files
+  - temp files from interrupted copies and empty folders
+Exits with status 1 if problems are found, so it can run from cron.
+
+Flags:
+`)
+		f.fs.PrintDefaults()
+	}
+	f.fs.Parse(args)
+	cfg, err := f.load(false)
+	if err != nil {
+		return err
+	}
+	rule, err := pickRule(cfg, *ruleName, "", "", "")
+	if err != nil {
+		return err
+	}
+	var paths []string
+	for _, a := range f.fs.Args() {
+		abs, err := filepath.Abs(a)
+		if err != nil {
+			return err
+		}
+		paths = append(paths, abs)
+	}
+	p, err := pipeline.New(cfg, f.logger(), nil, true, *offline)
+	if err != nil {
+		return err
+	}
+	if *withProbe && !probe.Available() {
+		return fmt.Errorf("-probe: ffprobe not found")
+	}
+	fmt.Fprintf(os.Stderr, "checking %s ...\n", rule.Output)
+	rep, err := health.Check(ctx, p, rule, health.Options{Paths: paths, Probe: *withProbe})
+	if err != nil {
+		return err
+	}
+	rep.Print(os.Stdout)
+	if rep.Problems() > 0 {
+		return errProblems
+	}
+	return nil
 }
