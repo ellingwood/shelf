@@ -1,0 +1,20 @@
+# systemd user unit. Install with: make install-service
+[Unit]
+Description=shelf - organize downloaded media for Jellyfin
+After=network-online.target local-fs.target
+Wants=network-online.target
+# Don't start (and dump files onto the root fs) if the library drive isn't mounted.
+# Set this to your library mount point:
+# RequiresMountsFor=/mnt/media
+
+[Service]
+Type=simple
+EnvironmentFile=-%h/.config/shelf/env
+ExecStart=%h/go/bin/shelf watch
+Restart=on-failure
+RestartSec=10
+Nice=10
+IOSchedulingClass=idle
+
+[Install]
+WantedBy=default.target
