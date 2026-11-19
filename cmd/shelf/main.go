@@ -26,6 +26,7 @@ import (
 	"shelf/internal/parse"
 	"shelf/internal/pipeline"
 	"shelf/internal/probe"
+	"shelf/internal/retrofit"
 	"shelf/internal/watch"
 )
 
@@ -35,6 +36,7 @@ Usage:
   shelf watch   [flags]              watch configured folders (daemon)
   shelf rename  [flags] <paths...>   organize files/folders once
   shelf preview [flags] <names...>   show how names parse and where they'd go
+  shelf retrofit [-apply] [paths...] re-organize an existing library in place
   shelf history [-n N]               list recent operations
   shelf undo    [-last N | -id ID]   reverse operations
   shelf check                        validate config and test TMDB/Jellyfin
@@ -64,6 +66,8 @@ func main() {
 		err = cmdRename(ctx, args)
 	case "preview":
 		err = cmdPreview(ctx, args)
+	case "retrofit":
+		err = cmdRetrofit(ctx, args)
 	case "history":
 		err = cmdHistory(args)
 	case "undo":
@@ -617,3 +621,75 @@ rules:
     # templates:                 # override the preset with Go templates
     #   movie: '{{.Title | clean}} ({{.Year}})/{{.Title | clean}} ({{.Year}}) - {{.Resolution}}{{.Ext}}'
 `
+
+func cmdRetrofit(ctx context.Context, args []string) error {
+	f := newFlags("retrofit")
+	apply := f.fs.Bool("apply", false, "actually move files (default is a dry run)")
+	offline := f.fs.Bool("offline", false, "don't query TMDB (names from files/folders only)")
+	ruleName := f.fs.String("rule", "", "rule whose output library to retrofit (default: first rule)")
+	dups := f.fs.String("duplicates", "skip", "when files collide: skip (report) | keep-larger (move smaller aside)")
+	f.fs.Usage = func() {
+		fmt.Fprintf(os.Stderr, `Usage: shelf retrofit [flags] [paths inside the library...]
+
+Re-identifies every video in a rule's output library and renames it with the
+current templates: merges duplicate show/movie folders, adds [tmdbid-N] tags
+and episode titles, and moves subtitles, NFOs, thumbnails and folder artwork
+along. Without -apply it only prints the plan. Every move is recorded, so
+"shelf undo -last N" can reverse it. Nothing is deleted.
+
+Flags:
+`)
+		f.fs.PrintDefaults()
+	}
+	f.fs.Parse(args)
+	if *dups != "skip" && *dups != "keep-larger" {
+		return fmt.Errorf("-duplicates must be skip or keep-larger")
+	}
+	log := f.logger()
+	cfg, err := f.load(false)
+	if err != nil {
+		return err
+	}
+	rule, err := pickRule(cfg, *ruleName, "", "", "")
+	if err != nil {
+		return err
+	}
+	var paths []string
+	for _, a := range f.fs.Args() {
+		abs, err := filepath.Abs(a)
+		if err != nil {
+			return err
+		}
+		paths = append(paths, abs)
+	}
+	p, err := pipeline.New(cfg, log, nil, !*apply, *offline)
+	if err != nil {
+		return err
+	}
+	if p.TMDB == nil {
+		fmt.Fprintln(os.Stderr, "note: TMDB disabled; names come from existing files and folders only")
+	}
+	fmt.Fprintf(os.Stderr, "scanning %s ...\n", rule.Output)
+	plan, err := retrofit.Build(ctx, p, rule, retrofit.Options{Duplicates: *dups, Paths: paths})
+	if err != nil {
+		return err
+	}
+	plan.Print(os.Stdout)
+	if len(plan.Ops) == 0 {
+		return nil
+	}
+	if !*apply {
+		fmt.Println("\nDry run: nothing changed. Re-run with -apply to perform these moves.")
+		return nil
+	}
+	err = plan.Apply(p, rule, os.Stdout)
+	fmt.Printf("\nApplied %d move(s). Undo with: shelf undo -last %d\n", len(plan.Ops), len(plan.Ops))
+	if p.Jelly != nil {
+		if jerr := p.Jelly.RefreshAll(ctx); jerr != nil {
+			log.Error("jellyfin refresh failed", "err", jerr)
+		} else {
+			fmt.Println("Jellyfin library refresh started.")
+		}
+	}
+	return err
+}

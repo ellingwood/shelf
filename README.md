@@ -43,6 +43,7 @@ make logs
 | `shelf watch` | Daemon: watch rules' folders and import files once they finish arriving |
 | `shelf rename [-dry-run] [-output DIR] [-action copy] paths…` | One-shot import of files/folders |
 | `shelf preview names…` | Show parsed fields, TMDB match and destination; touches nothing (files needn't exist) |
+| `shelf retrofit [-apply] [-duplicates keep-larger] [paths…]` | Re-organize an existing library in place: merge duplicate show/movie folders, add `[tmdbid-N]` tags and episode titles, carry sidecars and artwork along. Dry run unless `-apply` |
 | `shelf history [-n 50]` | Recent operations |
 | `shelf undo [-last N \| -id ID] [-dry-run]` | Reverse operations (moves go back, copies/links are removed) |
 | `shelf check` | Validate config, check dirs/drive, test TMDB key, ffprobe and Jellyfin |
@@ -89,6 +90,23 @@ episode: Shows/{{.Show | clean}}{{with .ShowYear}} ({{.}}){{end}}{{with .TMDBID}
 | `lower` `upper` `title` `trim` `replace OLD NEW` | string helpers |
 
 Try templates safely with `shelf preview "Some.Movie.2020.1080p.mkv"`.
+
+## Retrofitting an existing library
+
+`shelf retrofit` puts a library that was organized by hand, or by older templates, into the current layout. It only renames inside the library drive, so moves are instant.
+
+```sh
+shelf retrofit                                   # dry run: print the full plan
+shelf retrofit "/mnt/media/Shows/FROM (2022)"    # limit to part of the library
+shelf retrofit -apply                            # do it (Jellyfin rescans afterwards)
+shelf undo -last N                               # reverse it (N is printed after -apply)
+```
+
+- Every video is re-identified. An existing `[tmdbid-N]` folder tag is used directly instead of searching, and copies of the same title and year are given that ID, so split folders such as `Show (2026)` and `Show (2026) [tmdbid-1]` merge.
+- Sidecars named after a video move with it and keep their suffix: `.en.srt`, `.nfo`, `-thumb.jpg`, `.trickplay/`. Folder-level files (`poster.jpg`, `tvshow.nfo`, `season.nfo`, trailers) are merged into the new folder when the old one is being emptied. Anything whose name is already taken is left in place and listed.
+- Extras (`extras/`, `trailers/`, `*-trailer.mkv`, …) are never renamed as movies or episodes.
+- Files that can't be matched confidently are listed and left alone.
+- **Duplicates:** when two files want the same name, the default `-duplicates skip` reports them and moves neither. `-duplicates keep-larger` keeps the larger file and moves the others to `<output>/.shelf-review/duplicates/`, preserving their old paths. Nothing is ever deleted.
 
 ## Notes
 

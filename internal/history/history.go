@@ -105,10 +105,21 @@ func (s *Store) Undo(e Entry) error {
 	}
 	switch e.Action {
 	case "move":
-		if _, err := os.Stat(e.Src); err == nil {
-			return fmt.Errorf("cannot restore %s: a file already exists there", e.Src)
+		if _, err := os.Lstat(e.Src); err == nil {
+			return fmt.Errorf("cannot restore %s: something already exists there", e.Src)
 		}
-		if _, err := fileops.Place(e.Dst, e.Src, "move", "skip"); err != nil {
+		fi, err := os.Stat(e.Dst)
+		if err != nil {
+			return err
+		}
+		if fi.IsDir() { // retrofit moves sidecar folders (e.g. .trickplay)
+			if err := os.MkdirAll(filepath.Dir(e.Src), 0o755); err != nil {
+				return err
+			}
+			if err := os.Rename(e.Dst, e.Src); err != nil {
+				return err
+			}
+		} else if _, err := fileops.Place(e.Dst, e.Src, "move", "skip"); err != nil {
 			return err
 		}
 	case "copy", "hardlink", "symlink":

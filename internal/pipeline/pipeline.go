@@ -256,6 +256,11 @@ func (p *Pipeline) Execute(ctx context.Context, plan *Plan) error {
 	return nil
 }
 
+// Record logs a completed operation to history (no-op in dry-run mode).
+func (p *Pipeline) Record(rule *config.Rule, src string, res fileops.Result) {
+	p.record(rule, src, res)
+}
+
 func (p *Pipeline) record(rule *config.Rule, src string, res fileops.Result) {
 	if p.Hist == nil {
 		return

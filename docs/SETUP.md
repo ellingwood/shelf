@@ -228,6 +228,19 @@ jellyfin:
 
 ---
 
+## 11. Bringing an existing library into line
+
+If the library already holds media organized another way, or older shelf imports without `[tmdbid-N]` tags, run a dry run first and read the plan:
+
+```sh
+shelf retrofit | less
+shelf retrofit -apply           # then: shelf undo -last N to reverse
+```
+
+See "Retrofitting an existing library" in the README for how duplicates, sidecars and artwork are handled.
+
+---
+
 ## Troubleshooting
 
 | Symptom | Fix |

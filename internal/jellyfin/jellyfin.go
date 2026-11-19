@@ -81,6 +81,21 @@ func (n *Notifier) Flush(ctx context.Context) {
 	n.log.Info("jellyfin notified", "files", len(paths), "mode", n.cfg.Mode)
 }
 
+// RefreshAll asks Jellyfin to rescan every library (used after bulk moves,
+// where targeted "created" notices can't describe removals).
+func (n *Notifier) RefreshAll(ctx context.Context) error {
+	if n == nil {
+		return nil
+	}
+	n.mu.Lock()
+	n.pending = nil
+	if n.timer != nil {
+		n.timer.Stop()
+	}
+	n.mu.Unlock()
+	return n.post(ctx, "/Library/Refresh", nil)
+}
+
 // Ping checks connectivity and the API key.
 func (n *Notifier) Ping(ctx context.Context) error {
 	req, err := n.request(ctx, http.MethodGet, "/System/Info", nil)
