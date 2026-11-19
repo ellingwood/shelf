@@ -251,6 +251,7 @@ Log out and back in (or reboot) so your own session picks up the new group. `she
 ## 10. Day-to-day
 
 - **Drop files into the watch folder.** Browser downloads (`.crdownload`), `.part` files and anything still growing are ignored until they finish.
+- **Clean up the review folder:** `shelf cleanup` lists unmatched imports, replaced versions and duplicates with their size and age; add `-delete` to remove them (filter with `-only` and `-older-than`).
 - **Check the review folder now and then** (`/mnt/media/.shelf-review`). Files land there when TMDB isn't confident. Rename one more clearly (e.g. `Title (Year).mkv` or `Show S01E02.mkv`) and move it back into the watch folder.
 - **Subtitles** next to a video, or in `Subs/`, are moved along and renamed `.en.srt`, `.en.forced.srt`, `.en.sdh.srt`.
 - **"same video content as …" in the review folder** means the file holds the same bytes as a video already in the library. Usually the download helper grabbed the previous episode's stream again. Reload the page, clear the helper's detected-media list and download it again.

@@ -312,7 +312,7 @@ func (r *Report) Print(w io.Writer) {
 		}
 	}
 	if r.InReview > 0 {
-		fmt.Fprintf(w, "\n· %d file(s) waiting in %s\n", r.InReview, r.ReviewDir)
+		fmt.Fprintf(w, "\n· %d file(s) waiting in %s (see: shelf cleanup)\n", r.InReview, r.ReviewDir)
 	}
 
 	if n := r.Problems(); n == 0 {

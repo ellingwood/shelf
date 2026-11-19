@@ -13,6 +13,7 @@ import (
 	"os/signal"
 	"os/user"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -20,6 +21,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"shelf/internal/cleanup"
 	"shelf/internal/config"
 	"shelf/internal/health"
 	"shelf/internal/history"
@@ -42,6 +44,7 @@ Usage:
   shelf preview [flags] <names...>   show how names parse and where they'd go
   shelf retrofit [-apply] [paths...] re-organize an existing library in place
   shelf subs    [-apply] [paths...]  download missing subtitles (OpenSubtitles)
+  shelf cleanup [-delete]           list (and delete) review-folder items
   shelf health  [-probe] [paths...]  report library problems (duplicates, gaps...)
   shelf history [-n N]               list recent operations
   shelf undo    [-last N | -id ID]   reverse operations
@@ -76,6 +79,8 @@ func main() {
 		err = cmdRetrofit(ctx, args)
 	case "subs":
 		err = cmdSubs(ctx, args)
+	case "cleanup":
+		err = cmdCleanup(args)
 	case "health":
 		err = cmdHealth(ctx, args)
 	case "history":
@@ -991,4 +996,92 @@ func relTo(root, p string) string {
 		return r
 	}
 	return p
+}
+
+func cmdCleanup(args []string) error {
+	f := newFlags("cleanup")
+	del := f.fs.Bool("delete", false, "permanently delete the listed items (default: only list them)")
+	older := f.fs.String("older-than", "", "only items moved to review at least this long ago, e.g. 7d or 12h")
+	only := f.fs.String("only", "", "only these groups, comma-separated: "+strings.Join(cleanup.Categories, ", "))
+	f.fs.Usage = func() {
+		fmt.Fprintf(os.Stderr, `Usage: shelf cleanup [flags]
+
+Lists what is waiting in each rule's review folder, grouped by why it is
+there: unmatched imports, older versions replaced by a new import, and
+duplicates set aside by retrofit. Nothing is deleted unless you pass
+-delete, which removes exactly the items listed with the same filters.
+
+Flags:
+`)
+		f.fs.PrintDefaults()
+	}
+	f.fs.Parse(args)
+	cfg, err := f.load(false)
+	if err != nil {
+		return err
+	}
+	opt := cleanup.Options{Now: time.Now()}
+	if opt.OlderThan, err = cleanup.ParseAge(*older); err != nil {
+		return err
+	}
+	if *only != "" {
+		for _, c := range strings.Split(*only, ",") {
+			c = strings.TrimSpace(c)
+			if !slices.Contains(cleanup.Categories, c) {
+				return fmt.Errorf("-only: unknown group %q (have %s)", c, strings.Join(cleanup.Categories, ", "))
+			}
+			opt.Only = append(opt.Only, c)
+		}
+	}
+
+	seen := map[string]bool{}
+	var count, deleted int
+	var freed int64
+	var errs []error
+	for _, r := range cfg.Rules {
+		if r.ReviewDir == "" || seen[r.ReviewDir] {
+			continue
+		}
+		seen[r.ReviewDir] = true
+		items, err := cleanup.Scan(r.ReviewDir, opt)
+		if err != nil {
+			return err
+		}
+		if len(seen) > 1 {
+			fmt.Println()
+		}
+		cleanup.Print(os.Stdout, r.ReviewDir, items, opt.Now)
+		count += len(items)
+		if *del && len(items) > 0 {
+			n, size, err := cleanup.Delete(r.ReviewDir, items)
+			deleted += n
+			freed += size
+			if err != nil {
+				errs = append(errs, err)
+			}
+		}
+		if empty := cleanup.EmptyDirs(r.ReviewDir); len(empty) > 0 {
+			if *del {
+				fmt.Printf("Removed %d empty folder(s).\n", cleanup.RemoveDirs(empty))
+			} else {
+				fmt.Printf("  plus %d empty folder(s), removed by -delete\n", len(empty))
+				count++
+			}
+		}
+	}
+	switch {
+	case count == 0:
+	case *del:
+		fmt.Printf("\nDeleted %d item(s), freed %s.\n", deleted, cleanup.HumanSize(freed))
+	default:
+		cmd := "shelf cleanup -delete"
+		if *older != "" {
+			cmd += " -older-than " + *older
+		}
+		if *only != "" {
+			cmd += " -only " + *only
+		}
+		fmt.Printf("\nNothing deleted. To permanently delete these items: %s\n", cmd)
+	}
+	return errors.Join(errs...)
 }

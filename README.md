@@ -45,6 +45,7 @@ make logs
 | `shelf preview names…` | Show parsed fields, TMDB match and destination; touches nothing (files needn't exist) |
 | `shelf retrofit [-apply] [-duplicates keep-larger] [paths…]` | Re-organize an existing library in place: merge duplicate show/movie folders, add `[tmdbid-N]` tags and episode titles, carry sidecars and artwork along. Dry run unless `-apply` |
 | `shelf subs [-apply] [-lang en,es] [-limit N] [paths…]` | Find library videos without subtitles in your languages and download the best OpenSubtitles match, re-timed with ffsubsync. Preview unless `-apply` |
+| `shelf cleanup [-delete] [-older-than 7d] [-only replaced,duplicates,unmatched]` | List what's waiting in the review folder (unmatched imports, versions replaced by a new import, retrofit duplicates) with sizes and ages. `-delete` permanently removes exactly what's listed, plus empty folders |
 | `shelf health [-probe] [paths…]` | Report library problems without changing anything: identical-content files, several files for one title, missing episodes, misnamed or unidentified files, unreadable files (`-probe`), interrupted-copy leftovers and empty folders. Exits 1 if anything is found |
 | `shelf history [-n 50]` | Recent operations |
 | `shelf undo [-last N \| -id ID] [-dry-run]` | Reverse operations (moves go back, copies/links are removed) |
@@ -168,7 +169,7 @@ Credentials go in the env file: `OPENSUBTITLES_API_KEY` (create an "API consumer
 - **Different drives:** keep `action: move` (the default). `hardlink` can't cross filesystems, and `shelf check` warns if you try.
 - **Drive not mounted:** set `RequiresMountsFor=` in `deploy/shelf.service` so the daemon never writes into an empty mount-point directory on the root fs. `shelf check` also flags a missing output dir.
 - **Jellyfin in Docker:** use `jellyfin.path_map` to translate host paths to container paths.
-- **Review folder:** unmatched files go to `<output>/.shelf-review/`. Fix the name and drop the file back into the watch folder.
+- **Review folder:** unmatched files go to `<output>/.shelf-review/`. Fix the name and drop the file back into the watch folder. Versions replaced by an import land in `replaced/`, and retrofit duplicates in `duplicates/`. `shelf cleanup` lists everything there; `shelf cleanup -delete -only replaced -older-than 7d` deletes old replaced versions once you're sure the new ones are good.
 - **Jellyfin libraries:** point a Movies library at `<output>/Movies` and a Shows library at `<output>/Shows`.
 
 ## Project layout
