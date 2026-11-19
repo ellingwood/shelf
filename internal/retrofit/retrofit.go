@@ -427,7 +427,7 @@ func moveDir(src, dst string) error {
 	if exists(dst) {
 		return fmt.Errorf("%w: %s", fileops.ErrSkipped, dst)
 	}
-	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(dst), 0o775); err != nil {
 		return err
 	}
 	return os.Rename(src, dst)

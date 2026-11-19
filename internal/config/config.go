@@ -33,8 +33,34 @@ type Config struct {
 	HistoryFile    string   `yaml:"history_file"`
 	CacheDir       string   `yaml:"cache_dir"`
 
-	Jellyfin Jellyfin `yaml:"jellyfin"`
-	Rules    []Rule   `yaml:"rules"`
+	Jellyfin         Jellyfin         `yaml:"jellyfin"`
+	SubtitleDownload SubtitleDownload `yaml:"subtitle_download"`
+	Rules            []Rule           `yaml:"rules"`
+}
+
+// SubtitleDownload fetches subtitles from OpenSubtitles for videos that
+// have none in the wanted languages, optionally re-timing them to the
+// video's audio with ffsubsync.
+type SubtitleDownload struct {
+	Enabled   bool     `yaml:"enabled"`
+	Languages []string `yaml:"languages"` // OpenSubtitles codes: en, es, pt-BR...
+	// HearingImpaired: avoid (prefer plain, accept SDH) | prefer | exclude | include (no preference).
+	HearingImpaired string `yaml:"hearing_impaired"`
+	// Sync: auto (re-time unless the subtitle was made for this exact file) | always | never.
+	Sync      string `yaml:"sync"`
+	FFsubsync string `yaml:"ffsubsync"` // path; default: PATH, then ~/.local/bin
+	// OnImport fetches right after a file is imported (default true);
+	// otherwise only "shelf subs" fetches.
+	OnImport      *bool         `yaml:"on_import"`
+	OpenSubtitles OpenSubtitles `yaml:"opensubtitles"`
+}
+
+func (s SubtitleDownload) WantOnImport() bool { return s.Enabled && (s.OnImport == nil || *s.OnImport) }
+
+type OpenSubtitles struct {
+	APIKey   string `yaml:"api_key"`
+	Username string `yaml:"username"`
+	Password string `yaml:"password"`
 }
 
 type TMDB struct {
@@ -207,6 +233,17 @@ func (c *Config) applyDefaults() {
 	}
 	c.Jellyfin.URL = strings.TrimRight(c.Jellyfin.URL, "/")
 
+	sd := &c.SubtitleDownload
+	def(&sd.OpenSubtitles.APIKey, os.Getenv("OPENSUBTITLES_API_KEY"))
+	def(&sd.OpenSubtitles.Username, os.Getenv("OPENSUBTITLES_USERNAME"))
+	def(&sd.OpenSubtitles.Password, os.Getenv("OPENSUBTITLES_PASSWORD"))
+	if len(sd.Languages) == 0 {
+		sd.Languages = []string{"en"}
+	}
+	def(&sd.HearingImpaired, "avoid")
+	def(&sd.Sync, "auto")
+	sd.FFsubsync = ExpandHome(sd.FFsubsync)
+
 	for i := range c.Rules {
 		r := &c.Rules[i]
 		r.Watch = ExpandHome(r.Watch)
@@ -248,6 +285,11 @@ func (c *Config) Validate() error {
 	oneOf("jellyfin.mode", c.Jellyfin.Mode, "targeted", "full")
 	if c.Jellyfin.Refresh && (c.Jellyfin.URL == "" || c.Jellyfin.APIKey == "") {
 		add("jellyfin.refresh requires jellyfin.url and jellyfin.api_key")
+	}
+	oneOf("subtitle_download.hearing_impaired", c.SubtitleDownload.HearingImpaired, "avoid", "prefer", "exclude", "include")
+	oneOf("subtitle_download.sync", c.SubtitleDownload.Sync, "auto", "always", "never")
+	if o := c.SubtitleDownload.OpenSubtitles; c.SubtitleDownload.Enabled && (o.APIKey == "" || o.Username == "" || o.Password == "") {
+		add("subtitle_download requires opensubtitles.api_key, username and password (or OPENSUBTITLES_API_KEY, OPENSUBTITLES_USERNAME, OPENSUBTITLES_PASSWORD)")
 	}
 	if _, ok := naming.Presets[c.Preset]; !ok {
 		add("preset: unknown preset %q (have %s)", c.Preset, strings.Join(naming.PresetNames(), ", "))
@@ -388,7 +430,8 @@ func ParseSize(str string) (int64, error) {
 // checks the action/conflict and compiles templates.
 func (c *Config) PrepareRule(r *Rule) error {
 	tmp := Config{Action: r.Action, Conflict: r.Conflict, Probe: "auto", Preset: c.Preset,
-		TMDB: TMDB{OnNoMatch: "review"}, Jellyfin: Jellyfin{Mode: "targeted"}}
+		TMDB: TMDB{OnNoMatch: "review"}, Jellyfin: Jellyfin{Mode: "targeted"},
+		SubtitleDownload: SubtitleDownload{HearingImpaired: "avoid", Sync: "auto"}}
 	if err := tmp.Validate(); err != nil {
 		return err
 	}

@@ -11,8 +11,10 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"os/user"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"text/tabwriter"
@@ -28,6 +30,7 @@ import (
 	"shelf/internal/pipeline"
 	"shelf/internal/probe"
 	"shelf/internal/retrofit"
+	"shelf/internal/subs"
 	"shelf/internal/watch"
 )
 
@@ -38,6 +41,7 @@ Usage:
   shelf rename  [flags] <paths...>   organize files/folders once
   shelf preview [flags] <names...>   show how names parse and where they'd go
   shelf retrofit [-apply] [paths...] re-organize an existing library in place
+  shelf subs    [-apply] [paths...]  download missing subtitles (OpenSubtitles)
   shelf health  [-probe] [paths...]  report library problems (duplicates, gaps...)
   shelf history [-n N]               list recent operations
   shelf undo    [-last N | -id ID]   reverse operations
@@ -70,6 +74,8 @@ func main() {
 		err = cmdPreview(ctx, args)
 	case "retrofit":
 		err = cmdRetrofit(ctx, args)
+	case "subs":
+		err = cmdSubs(ctx, args)
 	case "health":
 		err = cmdHealth(ctx, args)
 	case "history":
@@ -155,7 +161,17 @@ func cmdWatch(ctx context.Context, args []string) error {
 	if *dry {
 		p.Out = os.Stdout
 	}
-	log.Info("shelf starting", "tmdb", p.TMDB != nil, "ffprobe", probe.Bin, "jellyfin", p.Jelly != nil, "dry_run", *dry)
+	subsState := "off"
+	if p.Subs != nil {
+		subsState = "on, no sync"
+		if p.Subs.Sync != nil {
+			subsState = "on, ffsubsync"
+		}
+		if !*dry {
+			p.Subs.Start(ctx)
+		}
+	}
+	log.Info("shelf starting", "tmdb", p.TMDB != nil, "ffprobe", probe.Bin, "jellyfin", p.Jelly != nil, "subtitles", subsState, "dry_run", *dry)
 
 	w, err := watch.New(cfg, log, func(ctx context.Context, rule *config.Rule, path string) {
 		if err := p.Process(ctx, rule, path, rule.Watch); err != nil {
@@ -510,6 +526,11 @@ func cmdCheck(ctx context.Context, args []string) error {
 		} else {
 			ok("output dir %s (writable)", r.Output)
 		}
+		if n, total, err := jellyfinCannotWrite(r.Output); err == nil && n > 0 {
+			warn("Jellyfin (user jellyfin) cannot write %d of %d library folders: it can't save subtitles or delete items there. See \"Permissions\" in docs/SETUP.md", n, total)
+		} else if err == nil {
+			ok("Jellyfin can write to all %d library folders", total)
+		}
 		if sameDevice(r.Watch, r.Output) == false && r.Action == "hardlink" {
 			bad("action hardlink but watch and output are on different filesystems; use move")
 			failed = true
@@ -539,6 +560,32 @@ func cmdCheck(ctx context.Context, args []string) error {
 	} else {
 		warn("ffprobe: not found — install ffmpeg for accurate resolution/HDR detection")
 	}
+	sd := cfg.SubtitleDownload
+	if o := sd.OpenSubtitles; o.APIKey != "" && o.Username != "" && o.Password != "" {
+		c := subs.NewClient(o.APIKey, o.Username, o.Password)
+		if allowed, err := c.Login(ctx); err != nil {
+			bad("OpenSubtitles: %v", err)
+			failed = true
+		} else {
+			state := "download on import"
+			if !sd.WantOnImport() {
+				state = "only via shelf subs (subtitle_download.enabled/on_import off)"
+			}
+			ok("OpenSubtitles: logged in, %d downloads/day; languages %s; %s", allowed, strings.Join(sd.Languages, ","), state)
+		}
+		if sd.Sync == "never" {
+			warn("ffsubsync: disabled (sync: never)")
+		} else if bin := subs.FindFFsubsync(sd.FFsubsync); bin != "" {
+			ok("ffsubsync: %s", bin)
+		} else {
+			warn("ffsubsync: not found — subtitles keep their original timing (install: uv tool install ffsubsync)")
+		}
+	} else if sd.Enabled {
+		bad("OpenSubtitles: subtitle_download enabled but credentials missing")
+		failed = true
+	} else {
+		warn("subtitle download disabled")
+	}
 	if cfg.Jellyfin.Refresh {
 		if err := jellyfin.New(cfg.Jellyfin, f.logger()).Ping(ctx); err != nil {
 			bad("Jellyfin: %v", err)
@@ -553,6 +600,49 @@ func cmdCheck(ctx context.Context, args []string) error {
 		return errors.New("check failed")
 	}
 	return nil
+}
+
+// jellyfinCannotWrite counts library folders (outside Jellyfin's own
+// metadata and hidden folders) that the local "jellyfin" user can't write.
+// It returns an error if there is no such user.
+func jellyfinCannotWrite(root string) (bad, total int, err error) {
+	u, err := user.Lookup("jellyfin")
+	if err != nil {
+		return 0, 0, err
+	}
+	uid, _ := strconv.Atoi(u.Uid)
+	groups := map[int]bool{}
+	if gids, err := u.GroupIds(); err == nil {
+		for _, g := range gids {
+			n, _ := strconv.Atoi(g)
+			groups[n] = true
+		}
+	}
+	filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+		if err != nil || !d.IsDir() {
+			return nil
+		}
+		if p != root && (strings.HasPrefix(d.Name(), ".") || (filepath.Dir(p) == root && d.Name() == "metadata")) {
+			return filepath.SkipDir
+		}
+		fi, err := d.Info()
+		if err != nil {
+			return nil
+		}
+		st, ok := fi.Sys().(*syscall.Stat_t)
+		if !ok {
+			return nil
+		}
+		total++
+		m := fi.Mode().Perm()
+		canWrite := (int(st.Uid) == uid && m&0o300 == 0o300) ||
+			(groups[int(st.Gid)] && m&0o030 == 0o030) || m&0o003 == 0o003
+		if !canWrite {
+			bad++
+		}
+		return nil
+	})
+	return bad, total, nil
 }
 
 func writable(dir string) error {
@@ -618,6 +708,16 @@ jellyfin:
   # If Jellyfin runs in Docker and sees the library at a different path:
   # path_map:
   #   - { from: /mnt/media, to: /media }
+
+# Download missing subtitles from OpenSubtitles after each import (and with
+# "shelf subs"). Credentials: OPENSUBTITLES_API_KEY, OPENSUBTITLES_USERNAME,
+# OPENSUBTITLES_PASSWORD in the env file.
+subtitle_download:
+  enabled: false
+  languages: [en]               # OpenSubtitles codes: en, es, pt-BR, ...
+  hearing_impaired: avoid       # avoid | prefer | exclude | include
+  sync: auto                    # re-time with ffsubsync: auto | always | never
+  # ffsubsync: ~/.local/bin/ffsubsync
 
 rules:
   - name: incoming
@@ -762,4 +862,133 @@ Flags:
 		return errProblems
 	}
 	return nil
+}
+
+func cmdSubs(ctx context.Context, args []string) error {
+	f := newFlags("subs")
+	apply := f.fs.Bool("apply", false, "download (default: only show what would be downloaded)")
+	force := f.fs.Bool("force", false, "fetch even where a subtitle already exists, replacing it")
+	langs := f.fs.String("lang", "", "comma-separated languages (default: subtitle_download.languages)")
+	limit := f.fs.Int("limit", 0, "stop after this many downloads (0 = until the daily quota runs out)")
+	ruleName := f.fs.String("rule", "", "rule whose output library to scan (default: first rule)")
+	f.fs.Usage = func() {
+		fmt.Fprintf(os.Stderr, `Usage: shelf subs [flags] [paths inside the library...]
+
+Finds library videos without subtitles in the configured languages (no
+"<name>.<lang>.srt" next to them and, if ffprobe is available, no embedded
+track), picks the best OpenSubtitles match and, with -apply, downloads it as
+"<name>.<lang>.srt", re-timed to the audio with ffsubsync when available.
+Without -apply it only searches (searches don't use the download quota).
+Downloads are recorded, so "shelf undo" removes them.
+
+Flags:
+`)
+		f.fs.PrintDefaults()
+	}
+	f.fs.Parse(args)
+	log := f.logger()
+	cfg, err := f.load(false)
+	if err != nil {
+		return err
+	}
+	rule, err := pickRule(cfg, *ruleName, "", "", "")
+	if err != nil {
+		return err
+	}
+	p, err := pipeline.New(cfg, log, nil, !*apply, true)
+	if err != nil {
+		return err
+	}
+	if p.Subs == nil {
+		return errors.New("OpenSubtitles credentials are not configured: set OPENSUBTITLES_API_KEY, OPENSUBTITLES_USERNAME and OPENSUBTITLES_PASSWORD in the env file (see docs/SETUP.md)")
+	}
+	var paths []string
+	for _, a := range f.fs.Args() {
+		abs, err := filepath.Abs(a)
+		if err != nil {
+			return err
+		}
+		paths = append(paths, abs)
+	}
+	videos, err := retrofit.Collect(rule.Output, paths, rule.ReviewDir)
+	if err != nil {
+		return err
+	}
+	opt := subs.Options{Force: *force, DryRun: !*apply}
+	if *langs != "" {
+		opt.Languages = strings.Split(*langs, ",")
+	}
+	if *apply && p.Subs.Sync == nil && cfg.SubtitleDownload.Sync != "never" {
+		fmt.Fprintln(os.Stderr, "note: ffsubsync not found; subtitles keep their original timing")
+	}
+
+	var downloaded, notFound, failed, checked int
+	for i, v := range videos {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if *limit > 0 && downloaded >= *limit {
+			fmt.Printf("\nStopped after %d download(s) (-limit); %d video(s) not checked.\n", downloaded, len(videos)-i)
+			break
+		}
+		m := parse.Path(v, rule.Output)
+		results, err := p.Subs.Fetch(ctx, subs.Job{Video: v, Media: m, Rule: rule}, opt)
+		var qe *subs.QuotaError
+		if len(results) > 0 || err != nil {
+			checked++
+			fmt.Println(relTo(rule.Output, v))
+		}
+		for _, r := range results {
+			switch r.Status {
+			case "would-download", "downloaded":
+				verb := "would get"
+				if r.Status == "downloaded" {
+					verb, downloaded = "got", downloaded+1
+				}
+				fmt.Printf("  %-5s %s %s (score %.1f)\n", r.Lang, verb, r.Sub.Describe(), r.Score)
+				if r.Sync != "" {
+					fmt.Printf("        sync: %s\n", r.Sync)
+				}
+				if !*apply {
+					downloaded++
+				}
+			case "not-found":
+				notFound++
+				fmt.Printf("  %-5s no usable subtitle on OpenSubtitles\n", r.Lang)
+			case "failed":
+				failed++
+				fmt.Printf("  %-5s failed: %v\n", r.Lang, r.Err)
+			}
+		}
+		if errors.As(err, &qe) {
+			fmt.Printf("\n%v. %d video(s) left; run again after the reset (or let the daemon catch up).\n", qe, len(videos)-i)
+			break
+		}
+		if err != nil {
+			failed++
+			fmt.Printf("  error: %v\n", err)
+		}
+	}
+	verb := "downloaded"
+	if !*apply {
+		verb = "to download"
+	}
+	fmt.Printf("\n%d video(s) scanned, %d need subtitles: %d %s, %d not found, %d failed.\n", len(videos), checked, downloaded, verb, notFound, failed)
+	if left, reset := p.Subs.Client.Remaining(); left >= 0 && *apply {
+		fmt.Printf("OpenSubtitles downloads left today: %d (resets %s)\n", left, reset.Local().Format("Jan 2 15:04"))
+	}
+	if !*apply && downloaded > 0 {
+		fmt.Println("Dry run: nothing downloaded. Re-run with -apply.")
+	}
+	if *apply && downloaded > 0 {
+		p.Flush(ctx)
+	}
+	return nil
+}
+
+func relTo(root, p string) string {
+	if r, err := filepath.Rel(root, p); err == nil && !strings.HasPrefix(r, "..") {
+		return r
+	}
+	return p
 }

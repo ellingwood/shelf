@@ -67,6 +67,11 @@ The binary always goes to `~/.local/bin`, whatever `GOBIN`/`GOPATH` say (Go vers
 1. Jellyfin web UI → Dashboard → API Keys → **+**.
 2. Name it `shelf` and copy the key.
 
+**OpenSubtitles** (optional, for subtitle downloads)
+1. Create a free account at https://www.opensubtitles.com.
+2. Go to your profile → **API consumers** → **New consumer**, name it `shelf`, and copy the **API key**.
+3. You will also need your account username and password, because downloads require a login. Free accounts get about 20 downloads a day.
+
 ---
 
 ## 5. Store secrets
@@ -78,6 +83,10 @@ mkdir -p ~/.config/shelf
 cat > ~/.config/shelf/env <<'EOF'
 TMDB_API_KEY=paste-tmdb-key-here
 JELLYFIN_API_KEY=paste-jellyfin-key-here
+# optional, for subtitle downloads
+OPENSUBTITLES_API_KEY=paste-consumer-key-here
+OPENSUBTITLES_USERNAME=your-username
+OPENSUBTITLES_PASSWORD=your-password
 EOF
 chmod 600 ~/.config/shelf/env
 ```
@@ -217,6 +226,26 @@ jellyfin:
     - { from: /mnt/media, to: /media }
 ```
 
+### Permissions
+
+Jellyfin runs as the `jellyfin` user, while shelf runs as you. Jellyfin only needs to read the library to play media. To save downloaded subtitles or delete items from the web UI, it also needs write access to the folders. Give both users a shared group:
+
+```sh
+sudo groupadd -f media
+sudo usermod -aG media jellyfin
+sudo usermod -aG media "$USER"
+sudo chgrp -R media /mnt/media
+sudo find /mnt/media -type d -exec chmod 2775 {} +   # group-writable; new items inherit the group
+sudo find /mnt/media -type f -exec chmod 664 {} +
+# let Jellyfin create group-writable files too:
+sudo mkdir -p /etc/systemd/system/jellyfin.service.d
+printf '[Service]\nUMask=0002\n' | sudo tee /etc/systemd/system/jellyfin.service.d/umask.conf
+sudo systemctl daemon-reload && sudo systemctl restart jellyfin
+make install-service    # shelf's unit sets UMask=0002 as well
+```
+
+Log out and back in (or reboot) so your own session picks up the new group. `shelf check` reports how many library folders Jellyfin can't write to.
+
 ---
 
 ## 10. Day-to-day
@@ -225,6 +254,7 @@ jellyfin:
 - **Check the review folder now and then** (`/mnt/media/.shelf-review`). Files land there when TMDB isn't confident. Rename one more clearly (e.g. `Title (Year).mkv` or `Show S01E02.mkv`) and move it back into the watch folder.
 - **Subtitles** next to a video, or in `Subs/`, are moved along and renamed `.en.srt`, `.en.forced.srt`, `.en.sdh.srt`.
 - **"same video content as …" in the review folder** means the file holds the same bytes as a video already in the library. Usually the download helper grabbed the previous episode's stream again. Reload the page, clear the helper's detected-media list and download it again.
+- **Subtitles:** with `subtitle_download.enabled: true`, each import gets subtitles in your languages from OpenSubtitles, re-timed with ffsubsync. To fill in the existing library, run `shelf subs` to preview, then `shelf subs -apply`. If the daily quota runs out, the daemon waits for the reset and continues on its own.
 - **Health check:** `shelf health` lists identical files, missing episodes, misnamed files and leftovers. Add `-probe` to catch truncated downloads.
 - **Upgrading quality:** set `conflict: keep-larger`, or use `preset: jellyfin-versions` to keep both versions.
 

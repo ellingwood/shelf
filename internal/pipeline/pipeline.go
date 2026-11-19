@@ -24,6 +24,7 @@ import (
 	"shelf/internal/media"
 	"shelf/internal/parse"
 	"shelf/internal/probe"
+	"shelf/internal/subs"
 )
 
 // ErrSkip means the file was deliberately left alone.
@@ -39,6 +40,7 @@ type Pipeline struct {
 	Out    io.Writer // where plans are printed (dry run / rename)
 	Probe  bool
 	Dupes  dupe.Cache
+	Subs   *subs.Fetcher // nil: subtitle download disabled
 
 	mu     sync.Mutex
 	failed map[string]time.Time // path → mtime of a deterministic failure
@@ -84,6 +86,13 @@ func New(cfg *config.Config, log *slog.Logger, out io.Writer, dryRun, offline bo
 		p.Probe = true
 	case "auto":
 		p.Probe = probe.Available()
+	}
+	// Created whenever credentials exist, so `shelf subs` works even with
+	// download-on-import off; Execute checks WantOnImport.
+	if o := cfg.SubtitleDownload.OpenSubtitles; o.APIKey != "" && o.Username != "" && o.Password != "" {
+		p.Subs = subs.New(cfg.SubtitleDownload, probe.Bin, log)
+		p.Subs.Probe = p.Probe
+		p.Subs.OnCreate = p.subtitleCreated
 	}
 	if !dryRun {
 		h, err := history.Open(cfg.HistoryFile)
@@ -205,6 +214,9 @@ func (p *Pipeline) findDuplicate(rule *config.Rule, path, dst string) string {
 		scope = filepath.Join(rule.Output, rel[:i])
 	}
 	found, err := p.Dupes.FindIn(path, scope, dst)
+	if errors.Is(err, os.ErrNotExist) {
+		return "" // previewing a name, not a file
+	}
 	if err != nil {
 		p.Log.Warn("duplicate check failed", "file", path, "err", err)
 		return ""
@@ -294,7 +306,7 @@ func (p *Pipeline) setAside(rule *config.Rule, video string) error {
 		var res fileops.Result
 		if fi, err := os.Stat(src); err == nil && fi.IsDir() {
 			dst = freeDir(dst)
-			if err = os.MkdirAll(filepath.Dir(dst), 0o755); err == nil {
+			if err = os.MkdirAll(filepath.Dir(dst), 0o775); err == nil {
 				err = os.Rename(src, dst)
 			}
 			if err != nil {
@@ -413,6 +425,9 @@ func (p *Pipeline) Execute(ctx context.Context, plan *Plan) error {
 
 	if !plan.Review {
 		p.Jelly.Notify(res.Dst)
+		if p.Subs != nil && p.Cfg.SubtitleDownload.WantOnImport() {
+			p.Subs.Submit(ctx, subs.Job{Video: res.Dst, Media: plan.Media, Rule: rule})
+		}
 	}
 	if rule.Action == "move" && rule.WantCleanupDirs() && rule.Watch != "" {
 		fileops.RemoveEmptyDirs(filepath.Dir(plan.Src), rule.Watch)
@@ -432,14 +447,22 @@ func (p *Pipeline) record(rule *config.Rule, src string, res fileops.Result) {
 	p.recordAction(rule.Action, rule, src, res)
 }
 
+// subtitleCreated records a downloaded subtitle (so undo can remove it)
+// and tells Jellyfin.
+func (p *Pipeline) subtitleCreated(job subs.Job, path string, sub subs.Subtitle) {
+	p.recordAction("create", job.Rule, fmt.Sprintf("opensubtitles:%d", sub.FileID), fileops.Result{Dst: path})
+	p.Jelly.Notify(path)
+}
+
 func (p *Pipeline) recordAction(action string, rule *config.Rule, src string, res fileops.Result) {
 	if p.Hist == nil {
 		return
 	}
-	if _, err := p.Hist.Record(history.Entry{
-		Action: action, Src: src, Dst: res.Dst, Overwrote: res.Overwrote,
-		Rule: rule.Name, OutputDir: rule.Output,
-	}); err != nil {
+	e := history.Entry{Action: action, Src: src, Dst: res.Dst, Overwrote: res.Overwrote}
+	if rule != nil {
+		e.Rule, e.OutputDir = rule.Name, rule.Output
+	}
+	if _, err := p.Hist.Record(e); err != nil {
 		p.Log.Error("history write failed", "err", err)
 	}
 }

@@ -44,6 +44,7 @@ make logs
 | `shelf rename [-dry-run] [-output DIR] [-action copy] paths…` | One-shot import of files/folders |
 | `shelf preview names…` | Show parsed fields, TMDB match and destination; touches nothing (files needn't exist) |
 | `shelf retrofit [-apply] [-duplicates keep-larger] [paths…]` | Re-organize an existing library in place: merge duplicate show/movie folders, add `[tmdbid-N]` tags and episode titles, carry sidecars and artwork along. Dry run unless `-apply` |
+| `shelf subs [-apply] [-lang en,es] [-limit N] [paths…]` | Find library videos without subtitles in your languages and download the best OpenSubtitles match, re-timed with ffsubsync. Preview unless `-apply` |
 | `shelf health [-probe] [paths…]` | Report library problems without changing anything: identical-content files, several files for one title, missing episodes, misnamed or unidentified files, unreadable files (`-probe`), interrupted-copy leftovers and empty folders. Exits 1 if anything is found |
 | `shelf history [-n 50]` | Recent operations |
 | `shelf undo [-last N \| -id ID] [-dry-run]` | Reverse operations (moves go back, copies/links are removed) |
@@ -62,7 +63,8 @@ All commands take `-config PATH` and `-v` (debug logging). `watch`, `rename`, `p
    **Duplicate check** (`check_duplicates`, on by default): if a video elsewhere in the same library category (`Shows/`, `Movies/`) has the same content, the file goes to review instead, with the matching file named in the log. This catches a download helper saving one stream under several episode names. Files are compared by size and then by a SHA-256 of three 1 MiB samples (start, middle, end), so only same-size files are read, 3 MiB each. The file at the destination itself is not counted; replacing it is up to `conflict`.
    **Other containers:** a video with the same name but a different extension counts as the same title. If the library has `Heat (1995).mp4` and `Heat (1995).mkv` arrives, `conflict` decides what happens. `overwrite`, or `keep-larger` with a larger new file, moves the old file and its `Heat (1995).*` sidecars to `<output>/.shelf-review/replaced/`, keeping their library path. Nothing is deleted, and `undo` puts it back. `skip`, or `keep-larger` with a file that isn't larger, leaves the new file in the watch folder. `suffix` keeps both. To keep several versions on purpose, use `preset: jellyfin-versions`.
 6. **Place.** `move` uses rename on the same filesystem. Across drives it copies to a hidden temp file, fsyncs, checks the size, renames into place and only then deletes the source. Subtitles come along renamed to Jellyfin's `.en.srt`, `.en.forced.srt` and `.en.sdh.srt` (from same-folder sidecars, `Subs/` and `Subs/<episode>/`). Empty source folders are removed.
-7. **Record and notify.** Each operation goes to `~/.local/state/shelf/history.jsonl` for `undo`. Jellyfin is told about new files through `/Library/Media/Updated`, debounced so a season pack sends one request.
+7. **Subtitles** (`subtitle_download.enabled`): languages that have no subtitle next to the video and no embedded track are fetched from OpenSubtitles in the background. See "Subtitle downloads" below.
+8. **Record and notify.** Each operation goes to `~/.local/state/shelf/history.jsonl` for `undo`. Jellyfin is told about new files through `/Library/Media/Updated`, debounced so a season pack sends one request.
 
 ## Templates
 
@@ -112,6 +114,37 @@ shelf undo -last N                               # reverse it (N is printed afte
 - **Identical content:** videos holding the same bytes under different names (for example several episodes that all play one episode) are listed under "Identical content". They are still renamed, since the names are right, but you should re-download all of them except the correct one. Set `check_duplicates: false` on the rule to skip this.
 - **Duplicates:** when two files want the same name (extensions ignored, so `Heat (1995).mp4` and `Heat (1995).mkv` collide), the default `-duplicates skip` reports them and moves neither. `-duplicates keep-larger` keeps the larger file and moves the others to `<output>/.shelf-review/duplicates/`, preserving their old paths. Nothing is ever deleted.
 
+## Subtitle downloads
+
+```yaml
+subtitle_download:
+  enabled: true
+  languages: [en]
+  hearing_impaired: avoid   # avoid | prefer | exclude | include
+  sync: auto                # auto | always | never
+```
+
+Credentials go in the env file: `OPENSUBTITLES_API_KEY` (create an "API consumer" in your opensubtitles.com profile), `OPENSUBTITLES_USERNAME` and `OPENSUBTITLES_PASSWORD`.
+
+**How shelf searches:** by the OpenSubtitles file hash plus the TMDB ID, or the show's TMDB ID plus season and episode, taken from the `[tmdbid-N]` folder. AI- and machine-translated subtitles, forced-only tracks and multi-CD sets are never used.
+
+**How it picks one:** download count leads, on a log scale, because ratings are sparse and most subtitles have no votes. Adjustments:
+
+| Signal | Effect |
+|---|---|
+| Hash match (made for this exact file) | always wins; no re-timing needed |
+| Release from the same kind of source (WEB for streaming captures, BluRay for BluRay) | +1, about 10× the downloads |
+| Release from a different source | −0.5 |
+| Rating, with 3 or more votes | −1 … +1 |
+| Trusted uploader | +0.5 |
+| Hearing-impaired | −1.5 with `avoid`, +1.5 with `prefer` |
+
+**Timing:** unless the subtitle was made for this exact file, it is re-timed to the audio with [ffsubsync](https://github.com/smacke/ffsubsync) (`uv tool install ffsubsync`), using Jellyfin's bundled ffmpeg if ffmpeg isn't on PATH. ffsubsync corrects an offset or a frame-rate difference, but not a different cut of the film. If syncing fails, the original timing is kept.
+
+**Result:** the subtitle is saved as `<video name>.<lang>.srt`, or `.<lang>.sdh.srt` for hearing-impaired subtitles, and recorded in history, so `shelf undo` removes it. Jellyfin is notified.
+
+**Quota:** free accounts get about 20 downloads a day. The daemon waits for the reset and then carries on. `shelf subs` stops and tells you when it resets. Searching doesn't use the quota, so `shelf subs` without `-apply` is free.
+
 ## Library health
 
 `shelf health` reads the library and changes nothing:
@@ -150,6 +183,7 @@ internal/fileops/   move/copy/link with cross-device safety and conflict policie
 internal/history/   JSONL operation log and undo
 internal/dupe/      identical-content detection (size + sampled SHA-256)
 internal/health/    read-only library report
+internal/subs/      OpenSubtitles client, subtitle ranking, ffsubsync
 internal/retrofit/  re-organize an existing library in place
 internal/watch/     fsnotify watcher with stability detection
 internal/pipeline/  parse → match → probe → render → place → record → notify

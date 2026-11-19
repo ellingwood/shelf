@@ -57,7 +57,7 @@ func Place(src, dst, action, conflict string) (Result, error) {
 		return res, err
 	}
 
-	if err := os.MkdirAll(filepath.Dir(res.Dst), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(res.Dst), 0o775); err != nil {
 		return res, err
 	}
 

@@ -214,3 +214,33 @@ func Check(ctx context.Context, path string) error {
 	}
 	return nil
 }
+
+// SubtitleLanguages lists the languages of a file's embedded subtitle
+// tracks, as ffprobe reports them ("eng", "spa"...), skipping forced tracks.
+func SubtitleLanguages(ctx context.Context, path string) ([]string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, Bin, "-v", "quiet", "-print_format", "json",
+		"-select_streams", "s", "-show_entries", "stream=index:stream_tags=language:stream_disposition=forced", path).Output()
+	if err != nil {
+		return nil, fmt.Errorf("ffprobe %s: %w", path, err)
+	}
+	var res struct {
+		Streams []struct {
+			Tags        struct{ Language string } `json:"tags"`
+			Disposition struct {
+				Forced int `json:"forced"`
+			} `json:"disposition"`
+		}
+	}
+	if err := json.Unmarshal(out, &res); err != nil {
+		return nil, err
+	}
+	var langs []string
+	for _, s := range res.Streams {
+		if s.Disposition.Forced == 0 && s.Tags.Language != "" {
+			langs = append(langs, s.Tags.Language)
+		}
+	}
+	return langs, nil
+}

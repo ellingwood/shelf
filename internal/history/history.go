@@ -113,7 +113,7 @@ func (s *Store) Undo(e Entry) error {
 			return err
 		}
 		if fi.IsDir() { // retrofit moves sidecar folders (e.g. .trickplay)
-			if err := os.MkdirAll(filepath.Dir(e.Src), 0o755); err != nil {
+			if err := os.MkdirAll(filepath.Dir(e.Src), 0o775); err != nil {
 				return err
 			}
 			if err := os.Rename(e.Dst, e.Src); err != nil {
@@ -122,7 +122,7 @@ func (s *Store) Undo(e Entry) error {
 		} else if _, err := fileops.Place(e.Dst, e.Src, "move", "skip"); err != nil {
 			return err
 		}
-	case "copy", "hardlink", "symlink":
+	case "copy", "hardlink", "symlink", "create": // create: a downloaded subtitle
 		if err := os.Remove(e.Dst); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
 		}

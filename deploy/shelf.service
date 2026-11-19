@@ -11,6 +11,9 @@ Wants=network-online.target
 Type=simple
 EnvironmentFile=-%h/.config/shelf/env
 ExecStart=%h/.local/bin/shelf watch
+# New library folders/files are group-writable, so Jellyfin (via a shared
+# group; see "Permissions" in docs/SETUP.md) can save subtitles and delete items.
+UMask=0002
 Restart=on-failure
 RestartSec=10
 Nice=10

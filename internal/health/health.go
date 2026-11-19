@@ -22,6 +22,7 @@ import (
 	"shelf/internal/pipeline"
 	"shelf/internal/probe"
 	"shelf/internal/retrofit"
+	"shelf/internal/subs"
 )
 
 type Options struct {
@@ -54,6 +55,9 @@ type Report struct {
 	Leftovers  []Issue
 	InReview   int
 	ReviewDir  string
+	// MissingSubs lists videos without subtitles in the configured
+	// languages (informational; only when subtitle_download is enabled).
+	MissingSubs []Issue
 }
 
 // Problems counts the findings that need attention.
@@ -113,6 +117,13 @@ func Check(ctx context.Context, p *pipeline.Pipeline, rule *config.Rule, opt Opt
 		}
 	}
 
+	if sd := p.Cfg.SubtitleDownload; sd.Enabled {
+		for _, f := range files {
+			if miss := subs.Missing(ctx, f, sd.Languages, opt.Probe); len(miss) > 0 {
+				rep.MissingSubs = append(rep.MissingSubs, Issue{Path: f, Reason: "no subtitles: " + strings.Join(miss, ", ")})
+			}
+		}
+	}
 	rep.Gaps = gaps(ctx, p, root, files, opt.Now)
 	rep.Leftovers = leftovers(root, opt.Paths, rule.ReviewDir, files)
 	rep.InReview = countFiles(rule.ReviewDir)
@@ -294,6 +305,12 @@ func (r *Report) Print(w io.Writer) {
 	}
 	issues("!", "Not identified", r.Unmatched)
 	issues("!", "Leftovers", r.Leftovers)
+	if len(r.MissingSubs) > 0 {
+		fmt.Fprintf(w, "\n· Missing subtitles (%d), fetch with: shelf subs -apply\n", len(r.MissingSubs))
+		for _, i := range r.MissingSubs {
+			fmt.Fprintf(w, "  %s  (%s)\n", rel(r.Root, i.Path), strings.TrimPrefix(i.Reason, "no subtitles: "))
+		}
+	}
 	if r.InReview > 0 {
 		fmt.Fprintf(w, "\n· %d file(s) waiting in %s\n", r.InReview, r.ReviewDir)
 	}
