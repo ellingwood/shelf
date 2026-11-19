@@ -107,7 +107,13 @@ func DefaultPath() string {
 }
 
 // Load reads, expands, defaults and validates a config file.
+//
+// Before parsing, it loads an "env" file from the same directory (if present)
+// so secrets like TMDB_API_KEY don't have to be exported in every shell.
 func Load(path string) (*Config, error) {
+	if err := LoadEnvFile(filepath.Join(filepath.Dir(path), "env")); err != nil {
+		return nil, err
+	}
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -386,5 +392,39 @@ func (c *Config) PrepareRule(r *Rule) error {
 		return err
 	}
 	r.renderer = rend
+	return nil
+}
+
+// LoadEnvFile reads KEY=VALUE lines (systemd EnvironmentFile / dotenv style)
+// into the process environment. Variables already set in the environment win,
+// so `TMDB_API_KEY=x shelf ...` still overrides the file. A missing file is
+// not an error.
+func LoadEnvFile(path string) error {
+	raw, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("env file: %w", err)
+	}
+	for i, line := range strings.Split(string(raw), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		line = strings.TrimPrefix(line, "export ")
+		key, val, ok := strings.Cut(line, "=")
+		key = strings.TrimSpace(key)
+		if !ok || key == "" {
+			return fmt.Errorf("%s:%d: expected KEY=VALUE", path, i+1)
+		}
+		val = strings.TrimSpace(val)
+		if len(val) >= 2 && (val[0] == '"' || val[0] == '\'') && val[len(val)-1] == val[0] {
+			val = val[1 : len(val)-1]
+		}
+		if _, set := os.LookupEnv(key); !set {
+			os.Setenv(key, val)
+		}
+	}
 	return nil
 }

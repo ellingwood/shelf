@@ -29,8 +29,7 @@ cat > ~/.config/shelf/env <<EOF         # secrets, chmod 600
 TMDB_API_KEY=...
 JELLYFIN_API_KEY=...
 EOF
-chmod 600 ~/.config/shelf/env
-set -a; . ~/.config/shelf/env; set +a
+chmod 600 ~/.config/shelf/env      # read automatically; no need to export
 shelf check                  # validates config, tests TMDB + Jellyfin
 shelf rename -dry-run ~/Downloads/shelf    # see what it would do
 make install-service         # run `shelf watch` under systemd --user

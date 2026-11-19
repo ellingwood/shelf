@@ -1,6 +1,8 @@
 package config
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -76,6 +78,35 @@ func TestParseSize(t *testing.T) {
 		got, err := ParseSize(in)
 		if err != nil || got != want {
 			t.Errorf("ParseSize(%q) = %d, %v; want %d", in, got, err, want)
+		}
+	}
+}
+
+func TestLoadEnvFile(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "env"), []byte(`# secrets
+SHELF_A=plain
+export SHELF_B="quoted value"
+SHELF_C='single'
+SHELF_D=from-file
+`), 0o600)
+	os.WriteFile(filepath.Join(dir, "config.yaml"), []byte("tmdb: { api_key: ${SHELF_A} }\n"), 0o600)
+	for _, k := range []string{"SHELF_A", "SHELF_B", "SHELF_C"} {
+		t.Setenv(k, "") // register cleanup...
+		os.Unsetenv(k)  // ...then make it truly unset
+	}
+	t.Setenv("SHELF_D", "from-shell") // real environment wins
+
+	c, err := Load(filepath.Join(dir, "config.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.TMDB.APIKey != "plain" {
+		t.Errorf("config did not see env file value: %q", c.TMDB.APIKey)
+	}
+	for k, want := range map[string]string{"SHELF_B": "quoted value", "SHELF_C": "single", "SHELF_D": "from-shell"} {
+		if got := os.Getenv(k); got != want {
+			t.Errorf("%s = %q, want %q", k, got, want)
 		}
 	}
 }

@@ -82,11 +82,7 @@ EOF
 chmod 600 ~/.config/shelf/env
 ```
 
-systemd loads this file for the daemon. For interactive use, load it into your shell:
-
-```sh
-set -a; . ~/.config/shelf/env; set +a
-```
+shelf reads this file automatically from the same folder as the config, so you don't need to export anything in your shell, and the systemd unit needs no extra setup. Variables already set in your environment take precedence, so `TMDB_API_KEY=other shelf check` still works for a one-off override. The format is plain `KEY=VALUE` lines; `#` comments, `export` prefixes and quoted values are fine.
 
 ---
 
