@@ -105,21 +105,36 @@ func Name(base string) media.Media {
 	cut := len(s) // where the title ends
 
 	// Episode detection.
+	var codeFirst bool
+	var codeFirstShow string
+	var codeFirstYear int
 	if loc, ok := parseEpisode(&m, s); ok {
 		m.Kind = media.Episode
 		cut = loc[0]
-		// Episode title: text after the episode code up to the next marker.
 		rest := s[loc[1]:]
-		end := len(rest)
-		for _, mk := range markers {
-			if l := mk.re.FindStringIndex(rest); l != nil && l[0] < end {
+		if strings.TrimSpace(s[:loc[0]]) == "" {
+			// Code-first naming: "S01E02 - Show Name (2005) - Episode Title - 1080p".
+			// The first " - " segment is the show, an optional second one
+			// (if it isn't technical info) is the episode title.
+			codeFirst = true
+			segs := strings.Split(strings.TrimLeft(rest, " -"), " - ")
+			show := segs[0][:untilMarker(segs[0], true)]
+			if l := reYear.FindStringIndex(show); l != nil && l[0] > 0 {
+				codeFirstYear, _ = strconv.Atoi(show[l[0]:l[1]])
+				show = show[:l[0]]
+			}
+			codeFirstShow = cleanTitle(show)
+			if len(segs) > 1 && untilMarker(segs[0], true) == len(segs[0]) {
+				m.EpisodeTitle = cleanTitle(segs[1][:untilMarker(segs[1], false)])
+			}
+		} else {
+			// Episode title: text after the episode code up to the next marker.
+			end := untilMarker(rest, false)
+			if l := reYear.FindStringIndex(rest); l != nil && l[0] < end {
 				end = l[0]
 			}
+			m.EpisodeTitle = cleanTitle(rest[:end])
 		}
-		if l := reYear.FindStringIndex(rest); l != nil && l[0] < end {
-			end = l[0]
-		}
-		m.EpisodeTitle = cleanTitle(rest[:end])
 	}
 
 	// Technical markers: apply all, and remember where the first ones are.
@@ -169,6 +184,9 @@ func Name(base string) media.Media {
 	}
 
 	title := cleanTitle(s[:cut])
+	if codeFirst {
+		title, m.Year = codeFirstShow, codeFirstYear
+	}
 	if m.Kind == media.Episode {
 		m.Show, m.ShowYear = title, m.Year
 		// For episodes, an embedded year belongs to the show, never the title.
@@ -258,6 +276,21 @@ func Path(path, root string) media.Media {
 	return m
 }
 
+// untilMarker returns the index of the first technical marker in s, or len(s).
+// With strongOnly, ambiguous markers (words that occur in titles) are ignored.
+func untilMarker(s string, strongOnly bool) int {
+	end := len(s)
+	for _, mk := range markers {
+		if strongOnly && mk.ambiguous {
+			continue
+		}
+		if l := mk.re.FindStringIndex(s); l != nil && l[0] < end {
+			end = l[0]
+		}
+	}
+	return end
+}
+
 func parseEpisode(m *media.Media, s string) ([]int, bool) {
 	if loc := reSxxEyy.FindStringSubmatchIndex(s); loc != nil {
 		sm := submatches(s, loc)
@@ -322,8 +355,16 @@ func submatches(s string, loc []int) []string {
 	return out
 }
 
+// reDomain matches a site tag like "Site.com" or "www.site.net" that stands
+// apart from the name (bounded by spaces, brackets, dashes or the string
+// edges, never by dots), so dotted titles like "Back.to.the.Future" are safe.
+var reDomain = regexp.MustCompile(`(?i)(^|[\s\[\](){}_-])(?:www\.)?[a-z0-9][a-z0-9-]*\.(?:com|org|net|to|mx|ag|io|me|tv|cc|ws|se|is|nu|lol|xyz|site|club|info|biz|co|li|ru|eu|top|vip|pro|watch|movie|movies|stream|online|live|fun|link|click|cx|sx|pw|am|ph|lt|vc|unblocked)($|[\s\[\](){}_-])`)
+
 func normalize(s string) string {
 	s = reLeadGroup.ReplaceAllString(s, "")
+	if stripped := reDomain.ReplaceAllString(s, "${1} ${2}"); strings.Trim(stripped, " -_[](){}") != "" {
+		s = stripped
+	}
 	s = reSeparators.ReplaceAllString(s, " ")
 	s = reBrackets.ReplaceAllString(s, " ")
 	s = reWebsite.ReplaceAllString(s, "")

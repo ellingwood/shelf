@@ -21,6 +21,17 @@ func TestName(t *testing.T) {
 		{"Heat.1995.Directors.Cut.1080p.BluRay.DTS.x264.mkv", media.Media{Kind: media.Movie, Title: "Heat", Year: 1995, Edition: "Director's Cut", Resolution: "1080p", Source: "BluRay", AudioCodec: "DTS", VideoCodec: "x264"}},
 		{"[YTS.MX] Parasite (2019) [1080p].mp4", media.Media{Kind: media.Movie, Title: "Parasite", Year: 2019, Resolution: "1080p"}},
 		{"the_shawshank_redemption_1994.avi", media.Media{Kind: media.Movie, Title: "The Shawshank Redemption", Year: 1994}},
+		// "Movie - info" naming.
+		{"The Matrix - 1999 1080p BluRay.mkv", media.Media{Kind: media.Movie, Title: "The Matrix", Year: 1999, Resolution: "1080p", Source: "BluRay"}},
+		{"Blade Runner 2049 - 2017 2160p.mkv", media.Media{Kind: media.Movie, Title: "Blade Runner 2049", Year: 2017, Resolution: "2160p"}},
+		{"Heat - 1080p.mkv", media.Media{Kind: media.Movie, Title: "Heat", Resolution: "1080p"}},
+		// Site tags are stripped, dotted titles are not.
+		{"Other Mommy - Ironflx.com.mp4", media.Media{Kind: media.Movie, Title: "Other Mommy"}},
+		{"www.Example.org - Arrival (2016) 1080p.mkv", media.Media{Kind: media.Movie, Title: "Arrival", Year: 2016, Resolution: "1080p"}},
+		{"Arrival.2016.1080p.WEB [site.to].mkv", media.Media{Kind: media.Movie, Title: "Arrival", Year: 2016, Resolution: "1080p"}},
+		{"Back.to.the.Future.1985.mkv", media.Media{Kind: media.Movie, Title: "Back to the Future", Year: 1985}},
+		{"Lost.in.Translation.2003.720p.mkv", media.Media{Kind: media.Movie, Title: "Lost in Translation", Year: 2003, Resolution: "720p"}},
+		{"Me.Before.You.2016.mkv", media.Media{Kind: media.Movie, Title: "Me Before You", Year: 2016}},
 		{"Inception.mkv", media.Media{Kind: media.Movie, Title: "Inception"}},
 
 		{"Breaking.Bad.S01E02.Cats.in.the.Bag.720p.WEB-DL.x264.mkv", media.Media{Kind: media.Episode, Show: "Breaking Bad", Season: 1, Episode: 2, Episodes: []int{2}, EpisodeTitle: "Cats in the Bag", Resolution: "720p", Source: "WEB-DL", VideoCodec: "x264"}},
@@ -30,6 +41,14 @@ func TestName(t *testing.T) {
 		{"Seinfeld 4x11 The Contest.avi", media.Media{Kind: media.Episode, Show: "Seinfeld", Season: 4, Episode: 11, Episodes: []int{11}, EpisodeTitle: "The Contest"}},
 		{"1883.S01E01.1080p.WEB.H264.mkv", media.Media{Kind: media.Episode, Show: "1883", Season: 1, Episode: 1, Episodes: []int{1}, Resolution: "1080p", Source: "WEBRip", VideoCodec: "x264"}},
 		{"Show Season 2 Episode 5.mp4", media.Media{Kind: media.Episode, Show: "Show", Season: 2, Episode: 5, Episodes: []int{5}}},
+		// Code-first naming: "SxxEyy - Show - info".
+		{"S01E02 - Breaking Bad - 1080p WEB-DL.mkv", media.Media{Kind: media.Episode, Show: "Breaking Bad", Season: 1, Episode: 2, Episodes: []int{2}, Resolution: "1080p", Source: "WEB-DL"}},
+		{"S03E10 - Doctor Who (2005) - 720p.mp4", media.Media{Kind: media.Episode, Show: "Doctor Who", ShowYear: 2005, Season: 3, Episode: 10, Episodes: []int{10}, Resolution: "720p"}},
+		{"S02E01-E02 - The Office - HDTV x264.mkv", media.Media{Kind: media.Episode, Show: "The Office", Season: 2, Episode: 1, Episodes: []int{1, 2}, Source: "HDTV", VideoCodec: "x264"}},
+		{"S01E01 - Web Therapy - Pilot - 1080p.mkv", media.Media{Kind: media.Episode, Show: "Web Therapy", Season: 1, Episode: 1, Episodes: []int{1}, EpisodeTitle: "Pilot", Resolution: "1080p"}},
+		{"S01E05 - 1883 - 1080p.mkv", media.Media{Kind: media.Episode, Show: "1883", Season: 1, Episode: 5, Episodes: []int{5}, Resolution: "1080p"}},
+		{"s01e02.breaking.bad.720p.mkv", media.Media{Kind: media.Episode, Show: "Breaking Bad", Season: 1, Episode: 2, Episodes: []int{2}, Resolution: "720p"}},
+		{"S01E02 - Breaking Bad - Site.net.mkv", media.Media{Kind: media.Episode, Show: "Breaking Bad", Season: 1, Episode: 2, Episodes: []int{2}}},
 		{"Planet.Earth.S00E03.Special.mkv", media.Media{Kind: media.Episode, Show: "Planet Earth", Season: 0, Episode: 3, Episodes: []int{3}, EpisodeTitle: "Special"}},
 	}
 	for _, tt := range tests {
