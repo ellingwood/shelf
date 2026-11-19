@@ -23,6 +23,8 @@ func TestCheck(t *testing.T) {
 		"Shows/X (2020)/Season 01/X S01E02.mkv":   1, // same content as E01
 		"Shows/X (2020)/Season 01/X S01E05.mkv":   2, // E03, E04 missing
 		"Shows/X (2020)/Season 02/X S02E01.mkv":   3,
+		"Movies/B (2003)/B (2003).mp4":            6, // same title, two containers
+		"Movies/B (2003)/B (2003).mkv":            7,
 		"Movies/Loose 2001 1080p.mkv":             4, // misnamed
 		"Movies/A (2000)/.A (2000).mkv.shelf-tmp": 5,
 		"metadata/People/Someone/":                0, // Jellyfin's, not ours
@@ -53,8 +55,11 @@ func TestCheck(t *testing.T) {
 	rep.Print(&out)
 	report := out.String()
 
-	if rep.Videos != 5 {
-		t.Errorf("videos = %d, want 5", rep.Videos)
+	if rep.Videos != 7 {
+		t.Errorf("videos = %d, want 7", rep.Videos)
+	}
+	if len(rep.Conflicts) != 2 {
+		t.Errorf("conflicts = %+v", rep.Conflicts)
 	}
 	if len(rep.Identical) != 1 || len(rep.Identical[0]) != 2 {
 		t.Errorf("identical = %v", rep.Identical)

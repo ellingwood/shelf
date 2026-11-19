@@ -113,7 +113,7 @@ Useful options:
 | Option | Default | Meaning |
 |---|---|---|
 | `preset` | `jellyfin` | `jellyfin-versions` adds ` - 1080p` / ` - 2160p` so several versions of a movie can coexist |
-| `conflict` | `skip` | when the destination exists: `skip`, `overwrite`, `suffix`, `keep-larger` (handy for upgrades) |
+| `conflict` | `skip` | when the destination exists, or the same name with another extension does: `skip`, `overwrite`, `suffix`, `keep-larger` (handy for upgrades). An existing file with another extension is moved to `.shelf-review/replaced/`, never deleted |
 | `stable_for` | `10s` | how long a file must stop growing before import |
 | `min_size` | `50MB` | ignore smaller files (samples, extras) |
 | `tmdb.min_confidence` | `0.75` | lower = more automatic matches, higher = more sent to review |

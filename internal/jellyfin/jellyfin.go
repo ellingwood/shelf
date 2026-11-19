@@ -25,9 +25,11 @@ type Notifier struct {
 	log  *slog.Logger
 
 	mu      sync.Mutex
-	pending []string
+	pending []update
 	timer   *time.Timer
 }
+
+type update struct{ Path, UpdateType string }
 
 func New(cfg config.Jellyfin, log *slog.Logger) *Notifier {
 	return &Notifier{cfg: cfg, http: &http.Client{Timeout: 30 * time.Second}, log: log}
@@ -35,13 +37,18 @@ func New(cfg config.Jellyfin, log *slog.Logger) *Notifier {
 
 // Notify queues a created file. The batch is sent after cfg.Debounce of
 // inactivity, so a season pack triggers one request, not twenty.
-func (n *Notifier) Notify(path string) {
+func (n *Notifier) Notify(path string) { n.queue(path, "Created") }
+
+// NotifyDeleted queues a removed file (e.g. a replaced version).
+func (n *Notifier) NotifyDeleted(path string) { n.queue(path, "Deleted") }
+
+func (n *Notifier) queue(path, kind string) {
 	if n == nil {
 		return
 	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	n.pending = append(n.pending, n.mapPath(path))
+	n.pending = append(n.pending, update{Path: n.mapPath(path), UpdateType: kind})
 	if n.timer != nil {
 		n.timer.Stop()
 	}
@@ -67,12 +74,7 @@ func (n *Notifier) Flush(ctx context.Context) {
 	if n.cfg.Mode == "full" {
 		err = n.post(ctx, "/Library/Refresh", nil)
 	} else {
-		type update struct{ Path, UpdateType string }
-		body := struct{ Updates []update }{}
-		for _, p := range paths {
-			body.Updates = append(body.Updates, update{Path: p, UpdateType: "Created"})
-		}
-		err = n.post(ctx, "/Library/Media/Updated", body)
+		err = n.post(ctx, "/Library/Media/Updated", struct{ Updates []update }{paths})
 	}
 	if err != nil {
 		n.log.Error("jellyfin notify failed", "err", err, "files", len(paths))

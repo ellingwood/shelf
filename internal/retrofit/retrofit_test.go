@@ -149,6 +149,35 @@ func TestDuplicates(t *testing.T) {
 	}
 }
 
+func TestOtherContainerIsDuplicate(t *testing.T) {
+	files := map[string]int{
+		"Movies/Heat (1995)/Heat (1995).mp4":    5,
+		"Movies/Heat (1995)/Heat (1995).mkv":    9,
+		"Movies/Heat (1995)/Heat (1995).en.srt": 1,
+	}
+	_, cfg, p := setup(t, files)
+	plan, _ := Build(context.Background(), p, &cfg.Rules[0], Options{Duplicates: "skip"})
+	if len(plan.Ops) != 0 || len(plan.Conflicts) != 2 {
+		t.Errorf("skip: ops=%v conflicts=%v", plan.Ops, plan.Conflicts)
+	}
+
+	lib, cfg, p := setup(t, files)
+	rule := &cfg.Rules[0]
+	plan, _ = Build(context.Background(), p, rule, Options{Duplicates: "keep-larger"})
+	if err := plan.Apply(p, rule, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Join(tree(t, lib), "\n")
+	want := strings.Join([]string{
+		".shelf-review/duplicates/Movies/Heat (1995)/Heat (1995).mp4",
+		"Movies/Heat (1995)/Heat (1995).en.srt", // stays with the kept copy
+		"Movies/Heat (1995)/Heat (1995).mkv",
+	}, "\n")
+	if got != want {
+		t.Errorf("tree:\n%s\nwant:\n%s", got, want)
+	}
+}
+
 func TestPathsMustBeInsideLibrary(t *testing.T) {
 	_, cfg, p := setup(t, map[string]int{"Movies/A (2000)/A (2000).mkv": 1})
 	if _, err := Build(context.Background(), p, &cfg.Rules[0], Options{Paths: []string{"/etc"}}); err == nil {

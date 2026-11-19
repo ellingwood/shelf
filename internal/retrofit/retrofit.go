@@ -131,21 +131,25 @@ func Build(ctx context.Context, p *pipeline.Pipeline, rule *config.Rule, opt Opt
 			x.pl.Dst = filepath.Join(root, relPath)
 		}
 		v := &video{src: x.pl.Src, dst: x.pl.Dst, size: x.size, kind: m.Kind, atDst: x.pl.Dst == x.pl.Src}
-		if _, ok := groups[v.dst]; !ok {
-			order = append(order, v.dst)
+		// "Heat (1995).mkv" and "Heat (1995).mp4" are the same title.
+		k := stemOf(v.dst)
+		if _, ok := groups[k]; !ok {
+			order = append(order, k)
 		}
-		groups[v.dst] = append(groups[v.dst], v)
+		groups[k] = append(groups[k], v)
 	}
 
 	// 2. Resolve collisions (several files → one name, or a name already taken).
 	type loss struct{ v, winner *video }
 	var winners []*video
 	var losers []loss
-	for _, dst := range order {
-		g := groups[dst]
-		if fi, err := os.Stat(dst); err == nil && !anyAt(g) {
-			// Something not in this scan already occupies the name.
-			g = append(g, &video{src: dst, dst: dst, size: fi.Size(), atDst: true})
+	for _, key := range order {
+		g := groups[key]
+		// Videos not in this scan that already hold the name (any extension).
+		for _, occ := range occupants(g) {
+			if fi, err := os.Stat(occ); err == nil {
+				g = append(g, &video{src: occ, dst: occ, size: fi.Size(), atDst: true})
+			}
 		}
 		if len(g) == 1 {
 			if g[0].atDst {
@@ -158,7 +162,7 @@ func Build(ctx context.Context, p *pipeline.Pipeline, rule *config.Rule, opt Opt
 		win := pickWinner(g, opt.Duplicates)
 		if win == nil {
 			for _, v := range g {
-				plan.Conflicts = append(plan.Conflicts, Issue{v.src, fmt.Sprintf("%d files want %s", len(g), rel(root, dst))})
+				plan.Conflicts = append(plan.Conflicts, Issue{v.src, fmt.Sprintf("%d files for %s", len(g), rel(root, key))})
 			}
 			continue
 		}
@@ -176,8 +180,10 @@ func Build(ctx context.Context, p *pipeline.Pipeline, rule *config.Rule, opt Opt
 
 	claimed := map[string]bool{}
 	moving := map[string]bool{}
-	for _, dst := range order {
-		claimed[dst] = true
+	for _, k := range order {
+		for _, v := range groups[k] {
+			claimed[v.dst] = true
+		}
 	}
 
 	dirMap := map[string]map[string]bool{}
@@ -196,7 +202,11 @@ func Build(ctx context.Context, p *pipeline.Pipeline, rule *config.Rule, opt Opt
 	for _, l := range losers {
 		dupDst := filepath.Join(rule.ReviewDir, "duplicates", rel(root, l.v.src))
 		plan.add(Op{Src: l.v.src, Dst: dupDst, Kind: "duplicate"}, moving, claimed)
-		plan.addSidecars(l.v.src, dupDst, moving, claimed)
+		// Sidecars shared by name with the kept copy (same folder, same
+		// stem, other extension) stay for the kept copy.
+		if stemOf(l.v.src) != stemOf(l.winner.src) {
+			plan.addSidecars(l.v.src, dupDst, moving, claimed)
+		}
 		mapDir(filepath.Dir(l.v.src), filepath.Dir(l.winner.dst))
 	}
 	// 4. Videos and their sidecars.
@@ -248,6 +258,28 @@ func Build(ctx context.Context, p *pipeline.Pipeline, rule *config.Rule, opt Opt
 		plan.prune[old] = true
 	}
 	return plan, nil
+}
+
+// stemOf drops the extension: the identity of a title's file.
+func stemOf(p string) string { return strings.TrimSuffix(p, filepath.Ext(p)) }
+
+// occupants lists existing videos with the group's destination name (any
+// extension) that are not part of the group.
+func occupants(g []*video) []string {
+	seen := map[string]bool{}
+	for _, v := range g {
+		seen[v.src] = true
+	}
+	var out []string
+	for _, v := range g {
+		for _, p := range append(pipeline.OtherVersions(v.dst), v.dst) {
+			if !seen[p] && exists(p) {
+				seen[p] = true
+				out = append(out, p)
+			}
+		}
+	}
+	return out
 }
 
 // titleKey identifies a show or movie by kind, normalized title and year.
@@ -343,15 +375,6 @@ func pickWinner(g []*video, policy string) *video {
 	return nil
 }
 
-func anyAt(g []*video) bool {
-	for _, v := range g {
-		if v.atDst {
-			return true
-		}
-	}
-	return false
-}
-
 // videoStaying returns a video under dir that is not planned to move.
 func videoStaying(dir string, moving map[string]bool) string {
 	var found string
@@ -384,7 +407,7 @@ func (pl *Plan) Apply(p *pipeline.Pipeline, rule *config.Rule, out io.Writer) er
 			errs = append(errs, fmt.Errorf("%s: %w", rel(pl.Root, op.Src), err))
 			continue
 		}
-		p.Record(rule, op.Src, res)
+		p.RecordMove(rule, op.Src, res)
 	}
 	// Remove folders emptied by the moves, never the category roots.
 	dirs := make([]string, 0, len(pl.prune))

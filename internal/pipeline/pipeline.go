@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -52,6 +53,13 @@ type Plan struct {
 	Review    bool
 	Reason    string // why it goes to review
 	Candidate *match.Candidate
+	// Replaces lists library videos with the same name but another
+	// extension ("Heat (1995).mp4" for a new "Heat (1995).mkv") that the
+	// conflict policy says to set aside under <review_dir>/replaced/.
+	Replaces []string
+	// Blocked is set when such a video exists and the conflict policy
+	// keeps it; the new file is then left where it is.
+	Blocked string
 }
 
 type SubPlan struct{ Src, Dst string }
@@ -155,6 +163,10 @@ func (p *Pipeline) MakePlan(ctx context.Context, rule *config.Rule, path, root s
 		}
 	}
 
+	if !plan.Review {
+		p.planVersions(plan)
+	}
+
 	if rule.WantSubtitles() {
 		videoStem := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
 		dstStem := strings.TrimSuffix(plan.Dst, filepath.Ext(plan.Dst))
@@ -200,6 +212,119 @@ func (p *Pipeline) findDuplicate(rule *config.Rule, path, dst string) string {
 	return found
 }
 
+// OtherVersions returns videos next to dst with the same name but a
+// different extension, e.g. "Heat (1995).mp4" for "Heat (1995).mkv". The
+// exact name and skip paths are not included.
+func OtherVersions(dst string, skip ...string) []string {
+	dir := filepath.Dir(dst)
+	stem := strings.TrimSuffix(filepath.Base(dst), filepath.Ext(dst))
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, e := range entries {
+		name := e.Name()
+		ext := filepath.Ext(name)
+		if e.IsDir() || !media.IsVideo(ext) || strings.TrimSuffix(name, ext) != stem || name == filepath.Base(dst) {
+			continue
+		}
+		p := filepath.Join(dir, name)
+		if !slices.Contains(skip, p) {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// planVersions applies the conflict policy to same-name videos with another
+// extension, which the filesystem doesn't see as a collision.
+func (p *Pipeline) planVersions(plan *Plan) {
+	others := OtherVersions(plan.Dst, plan.Src)
+	if len(others) == 0 {
+		return
+	}
+	names := make([]string, len(others))
+	for i, o := range others {
+		names[i] = filepath.Base(o)
+	}
+	switch plan.Rule.Conflict {
+	case "overwrite":
+		plan.Replaces = others
+	case "keep-larger":
+		src, err := os.Stat(plan.Src)
+		if err != nil {
+			return // dry-run preview of a name that doesn't exist
+		}
+		for _, o := range others {
+			if fi, err := os.Stat(o); err == nil && fi.Size() >= src.Size() {
+				plan.Blocked = fmt.Sprintf("library already has %s, which is not smaller (conflict: keep-larger)", filepath.Base(o))
+				return
+			}
+		}
+		plan.Replaces = others
+	case "suffix":
+		// keep both
+	default:
+		plan.Blocked = fmt.Sprintf("library already has %s (conflict: skip)", strings.Join(names, ", "))
+	}
+}
+
+// setAside moves a replaced video and its "<stem>." sidecars (subtitles,
+// NFO, trickplay) to <review_dir>/replaced/, mirroring their library path.
+func (p *Pipeline) setAside(rule *config.Rule, video string) error {
+	dir := filepath.Dir(video)
+	stem := strings.TrimSuffix(filepath.Base(video), filepath.Ext(video))
+	items := []string{video}
+	if entries, err := os.ReadDir(dir); err == nil {
+		for _, e := range entries {
+			name := e.Name()
+			// Other videos with this stem are other versions, not sidecars.
+			if strings.HasPrefix(name, stem+".") && name != filepath.Base(video) && (e.IsDir() || !media.IsVideo(filepath.Ext(name))) {
+				items = append(items, filepath.Join(dir, name))
+			}
+		}
+	}
+	for _, src := range items {
+		rel, err := filepath.Rel(rule.Output, src)
+		if err != nil || strings.HasPrefix(rel, "..") {
+			rel = filepath.Base(src)
+		}
+		dst := filepath.Join(rule.ReviewDir, "replaced", rel)
+		var res fileops.Result
+		if fi, err := os.Stat(src); err == nil && fi.IsDir() {
+			dst = freeDir(dst)
+			if err = os.MkdirAll(filepath.Dir(dst), 0o755); err == nil {
+				err = os.Rename(src, dst)
+			}
+			if err != nil {
+				return err
+			}
+			res.Dst = dst
+		} else if res, err = fileops.Place(src, dst, "move", "suffix"); err != nil {
+			return err
+		}
+		p.recordAction("move", rule, src, res)
+		p.Log.Info("set aside", "file", src, "to", res.Dst)
+		if src == video {
+			p.Jelly.NotifyDeleted(src)
+		}
+	}
+	return nil
+}
+
+func freeDir(p string) string {
+	if _, err := os.Lstat(p); errors.Is(err, os.ErrNotExist) {
+		return p
+	}
+	for i := 1; ; i++ {
+		c := fmt.Sprintf("%s (%d)", p, i)
+		if _, err := os.Lstat(c); errors.Is(err, os.ErrNotExist) {
+			return c
+		}
+	}
+}
+
 // Process plans and executes one file.
 func (p *Pipeline) Process(ctx context.Context, rule *config.Rule, path, root string) error {
 	info, err := os.Stat(path)
@@ -237,6 +362,18 @@ func (p *Pipeline) Execute(ctx context.Context, plan *Plan) error {
 		return nil
 	}
 	rule := plan.Rule
+	if plan.Blocked != "" {
+		if info, serr := os.Stat(plan.Src); serr == nil {
+			p.markFailed(plan.Src, info.ModTime())
+		}
+		p.Log.Warn("not placed", "file", plan.Src, "reason", plan.Blocked)
+		return nil
+	}
+	for _, old := range plan.Replaces {
+		if err := p.setAside(rule, old); err != nil {
+			return fmt.Errorf("setting aside %s: %w", old, err)
+		}
+	}
 	res, err := fileops.Place(plan.Src, plan.Dst, rule.Action, rule.Conflict)
 	if err != nil {
 		if info, serr := os.Stat(plan.Src); serr == nil {
@@ -286,17 +423,21 @@ func (p *Pipeline) Execute(ctx context.Context, plan *Plan) error {
 	return nil
 }
 
-// Record logs a completed operation to history (no-op in dry-run mode).
-func (p *Pipeline) Record(rule *config.Rule, src string, res fileops.Result) {
-	p.record(rule, src, res)
+// RecordMove logs a completed move to history (no-op in dry-run mode).
+func (p *Pipeline) RecordMove(rule *config.Rule, src string, res fileops.Result) {
+	p.recordAction("move", rule, src, res)
 }
 
 func (p *Pipeline) record(rule *config.Rule, src string, res fileops.Result) {
+	p.recordAction(rule.Action, rule, src, res)
+}
+
+func (p *Pipeline) recordAction(action string, rule *config.Rule, src string, res fileops.Result) {
 	if p.Hist == nil {
 		return
 	}
 	if _, err := p.Hist.Record(history.Entry{
-		Action: rule.Action, Src: src, Dst: res.Dst, Overwrote: res.Overwrote,
+		Action: action, Src: src, Dst: res.Dst, Overwrote: res.Overwrote,
 		Rule: rule.Name, OutputDir: rule.Output,
 	}); err != nil {
 		p.Log.Error("history write failed", "err", err)
@@ -339,7 +480,14 @@ func PrintPlan(w io.Writer, plan *Plan, dryRun bool) {
 	if plan.Review {
 		desc = "REVIEW: " + plan.Reason
 	}
+	if plan.Blocked != "" {
+		fmt.Fprintf(w, "%s  [%s]\n  not placed: %s\n", filepath.Base(plan.Src), desc, plan.Blocked)
+		return
+	}
 	fmt.Fprintf(w, "%s  [%s]\n  %s → %s\n", filepath.Base(plan.Src), desc, verb, plan.Dst)
+	for _, r := range plan.Replaces {
+		fmt.Fprintf(w, "    replaces %s (set aside in review/replaced)\n", filepath.Base(r))
+	}
 	for _, s := range plan.Subs {
 		fmt.Fprintf(w, "    + %s → %s\n", filepath.Base(s.Src), filepath.Base(s.Dst))
 	}
