@@ -113,6 +113,8 @@ func Check(ctx context.Context, p *pipeline.Pipeline, rule *config.Rule, opt Opt
 			}
 			if err := probe.Check(ctx, f); err != nil {
 				rep.Unreadable = append(rep.Unreadable, Issue{Path: f, Reason: err.Error()})
+			} else if reason := pipeline.Incomplete(ctx, f, parse.Path(f, root)); reason != "" {
+				rep.Unreadable = append(rep.Unreadable, Issue{Path: f, Reason: reason})
 			}
 		}
 	}
@@ -284,7 +286,7 @@ func (r *Report) Print(w io.Writer) {
 			fmt.Fprintf(w, "  %s\n      %s\n", rel(r.Root, i.Path), i.Reason)
 		}
 	}
-	issues("✗", "Unreadable", r.Unreadable)
+	issues("✗", "Unreadable or incomplete", r.Unreadable)
 	issues("✗", "Several files for one title: same episode or movie twice", r.Conflicts)
 
 	if len(r.Gaps) > 0 {

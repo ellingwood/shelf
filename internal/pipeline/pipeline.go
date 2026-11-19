@@ -90,7 +90,7 @@ func New(cfg *config.Config, log *slog.Logger, out io.Writer, dryRun, offline bo
 	// Created whenever credentials exist, so `shelf subs` works even with
 	// download-on-import off; Execute checks WantOnImport.
 	if o := cfg.SubtitleDownload.OpenSubtitles; o.APIKey != "" && o.Username != "" && o.Password != "" {
-		p.Subs = subs.New(cfg.SubtitleDownload, probe.Bin, log)
+		p.Subs = subs.New(cfg.SubtitleDownload, probe.Bin, filepath.Join(cfg.CacheDir, "subtitles"), log)
 		p.Subs.Probe = p.Probe
 		p.Subs.OnCreate = p.subtitleCreated
 	}
@@ -150,6 +150,11 @@ func (p *Pipeline) MakePlan(ctx context.Context, rule *config.Rule, path, root s
 		if _, err := os.Stat(path); err == nil {
 			if err := probe.Enrich(ctx, &m); err != nil {
 				p.Log.Warn("probe failed; using filename info", "file", path, "err", err)
+			}
+			if rule.WantCompleteCheck() {
+				if reason := Incomplete(ctx, path, m); reason != "" {
+					plan.Review, plan.Reason = true, reason
+				}
 			}
 		}
 	}
@@ -222,6 +227,39 @@ func (p *Pipeline) findDuplicate(rule *config.Rule, path, dst string) string {
 		return ""
 	}
 	return found
+}
+
+// Incomplete explains why a file looks like an aborted download, or
+// returns "". Truncated MKVs keep the full duration in their header, so the
+// last video packet is compared with it; a cleanly finished but cut-short
+// capture is compared with TMDB's runtime.
+func Incomplete(ctx context.Context, path string, m media.Media) string {
+	declared, actual, err := probe.Durations(ctx, path)
+	if err != nil {
+		return "unreadable, probably an incomplete download: " + err.Error()
+	}
+	if declared > 0 && actual == 0 {
+		return "incomplete download: no playable video found"
+	}
+	if actual > 0 && declared > 0 && actual < declared*0.97-30 {
+		return fmt.Sprintf("incomplete download: video stops at %s of %s", clock(actual), clock(declared))
+	}
+	length := actual
+	if length == 0 {
+		length = declared
+	}
+	if m.Runtime > 0 && length > 0 && length < float64(m.Runtime)*60*0.75 {
+		return fmt.Sprintf("much shorter than expected: %s, TMDB runtime %d min (incomplete download?)", clock(length), m.Runtime)
+	}
+	return ""
+}
+
+func clock(sec float64) string {
+	s := int(sec)
+	if s >= 3600 {
+		return fmt.Sprintf("%d:%02d:%02d", s/3600, s%3600/60, s%60)
+	}
+	return fmt.Sprintf("%d:%02d", s/60, s%60)
 }
 
 // OtherVersions returns videos next to dst with the same name but a
@@ -402,6 +440,9 @@ func (p *Pipeline) Execute(ctx context.Context, plan *Plan) error {
 		return nil
 	}
 	p.record(rule, plan.Src, res)
+	if res.Overwrote {
+		p.dropDownloadedSubs(res.Dst)
+	}
 	level := slog.LevelInfo
 	if p.Out != nil {
 		level = slog.LevelDebug // the plan was already printed
@@ -445,6 +486,35 @@ func (p *Pipeline) RecordMove(rule *config.Rule, src string, res fileops.Result)
 
 func (p *Pipeline) record(rule *config.Rule, src string, res fileops.Result) {
 	p.recordAction(rule.Action, rule, src, res)
+}
+
+// dropDownloadedSubs removes subtitles shelf downloaded for a video that
+// has just been replaced: they were chosen and re-timed for the old file
+// (possibly an incomplete one). The import then fetches fresh ones, which
+// usually come from the download cache without using quota. Subtitles
+// shelf didn't download are left alone.
+func (p *Pipeline) dropDownloadedSubs(video string) {
+	if p.Hist == nil {
+		return
+	}
+	entries, err := p.Hist.Active()
+	if err != nil {
+		return
+	}
+	stem := strings.TrimSuffix(video, filepath.Ext(video)) + "."
+	for _, e := range entries {
+		if e.Action != "create" || !strings.HasPrefix(e.Dst, stem) || filepath.Dir(e.Dst) != filepath.Dir(video) {
+			continue
+		}
+		if _, err := os.Stat(e.Dst); err != nil {
+			continue
+		}
+		if err := p.Hist.Undo(e); err != nil {
+			p.Log.Warn("could not remove stale subtitle", "file", e.Dst, "err", err)
+			continue
+		}
+		p.Log.Info("removed subtitle timed for the replaced file", "file", e.Dst)
+	}
 }
 
 // subtitleCreated records a downloaded subtitle (so undo can remove it)

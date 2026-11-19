@@ -60,6 +60,7 @@ All commands take `-config PATH` and `-v` (debug logging). `watch`, `rename`, `p
 2. **Parse.** The filename is parsed into title, year, SxxEyy (including `S01E01-E02`, `1x02`, `Season 1 Episode 2`), resolution, source, codecs, HDR and edition. Parent folders fill gaps: `Show/Season 1/E02.mkv` and `Heat (1995)/heat.mkv` both work.
 3. **Match.** TMDB supplies the canonical title, year, ID and episode title. Year agreement settles same-name remakes. A match below `min_confidence` goes to the review folder (`on_no_match`). Responses are cached for 7 days in `~/.cache/shelf`.
 4. **Probe** (if `ffprobe` is found on `PATH`, in Jellyfin's bundle, or at the `ffprobe:` config path): real resolution, codecs and HDR/DV from the streams, overriding what the filename claims.
+   **Completeness check** (`check_complete`, on by default, needs ffprobe): an aborted download goes to review instead of the library. A cut-off MKV still claims its full length in its header, so shelf compares that with where the video actually stops (the last packet). It also flags a file that is far shorter than TMDB's runtime, which catches captures that were saved cleanly but stopped early.
 5. **Render.** The Go template becomes the destination path. Each segment is sanitized (`:` → ` -`, no `?*<>|"`, no trailing dots) and `..` is rejected.
    **Duplicate check** (`check_duplicates`, on by default): if a video elsewhere in the same library category (`Shows/`, `Movies/`) has the same content, the file goes to review instead, with the matching file named in the log. This catches a download helper saving one stream under several episode names. Files are compared by size and then by a SHA-256 of three 1 MiB samples (start, middle, end), so only same-size files are read, 3 MiB each. The file at the destination itself is not counted; replacing it is up to `conflict`.
    **Other containers:** a video with the same name but a different extension counts as the same title. If the library has `Heat (1995).mp4` and `Heat (1995).mkv` arrives, `conflict` decides what happens. `overwrite`, or `keep-larger` with a larger new file, moves the old file and its `Heat (1995).*` sidecars to `<output>/.shelf-review/replaced/`, keeping their library path. Nothing is deleted, and `undo` puts it back. `skip`, or `keep-larger` with a file that isn't larger, leaves the new file in the watch folder. `suffix` keeps both. To keep several versions on purpose, use `preset: jellyfin-versions`.
@@ -144,6 +145,8 @@ Credentials go in the env file: `OPENSUBTITLES_API_KEY` (create an "API consumer
 
 **Result:** the subtitle is saved as `<video name>.<lang>.srt`, or `.<lang>.sdh.srt` for hearing-impaired subtitles, and recorded in history, so `shelf undo` removes it. Jellyfin is notified.
 
+**Replaced videos:** when an import replaces a video, the subtitles shelf downloaded for the old file are removed and fetched again, because they were timed against the old file. Raw downloads are cached in `~/.cache/shelf/subtitles/` for 180 days, so re-timing a replaced file doesn't use quota. Subtitles shelf didn't download are left alone.
+
 **Quota:** free accounts get about 20 downloads a day. The daemon waits for the reset and then carries on. `shelf subs` stops and tells you when it resets. Searching doesn't use the quota, so `shelf subs` without `-apply` is free.
 
 ## Library health
@@ -160,7 +163,7 @@ Credentials go in the env file: `OPENSUBTITLES_API_KEY` (create an "API consumer
 ```
 
 - **Missing episodes** are checked against TMDB's aired episodes when the show folder has a `[tmdbid-N]` tag. Otherwise shelf looks for holes between E01 and the highest episode you have. Season 0 (specials) is not checked.
-- **`-probe`** runs ffprobe on every video and flags files with no video stream or no duration, which usually means a truncated download. It reads only container headers, so it takes a fraction of a second per file.
+- **`-probe`** runs ffprobe on every video and flags unreadable files and incomplete downloads, using the same check as imports. It reads only container headers, so it takes a fraction of a second per file.
 - Only the library folders that hold videos are searched, so Jellyfin's `metadata/` folder is ignored.
 - The exit status is 1 when problems are found. A weekly run could look like this: `0 9 * * 0 shelf health >/dev/null || notify-send "shelf: library problems"`.
 

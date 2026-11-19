@@ -81,6 +81,7 @@ func fetcher(t *testing.T, f *fakeOS, sync *Syncer) *Fetcher {
 	cfg := config.SubtitleDownload{Languages: []string{"en", "es"}, HearingImpaired: "avoid", Sync: "auto"}
 	fe := &Fetcher{Client: NewClient("key", "me", "pw"), Cfg: cfg, Sync: sync, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	fe.Client.BaseURL = f.srv.URL
+	fe.CacheDir = filepath.Join(t.TempDir(), "cache")
 	return fe
 }
 
@@ -159,6 +160,15 @@ func TestQuota(t *testing.T) {
 	if _, err := fe.Fetch(context.Background(), Job{Video: a, Media: m}, Options{Languages: []string{"en"}}); err != nil {
 		t.Fatal(err)
 	}
+	// Same subtitle for a replacement copy: served from the cache, no quota.
+	a2 := video(t, d, "A2/Heat (1995).mkv")
+	if res, err := fe.Fetch(context.Background(), Job{Video: a2, Media: m}, Options{Languages: []string{"en"}}); err != nil || res[0].Status != "downloaded" {
+		t.Fatalf("cached fetch: %+v %v", res, err)
+	}
+	if f.downloads.Load() != 1 {
+		t.Errorf("cache miss: %d downloads", f.downloads.Load())
+	}
+	fe.CacheDir = "" // force real downloads from here on
 	b := video(t, d, "B/Heat (1995).mkv")
 	_, err := fe.Fetch(context.Background(), Job{Video: b, Media: m}, Options{Languages: []string{"en"}})
 	qe, ok := err.(*QuotaError)

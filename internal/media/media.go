@@ -50,7 +50,8 @@ type Media struct {
 	HDR        string // HDR10, HDR10+, DV, HLG
 
 	// Database identifiers (filled by TMDB matching).
-	TMDBID int
+	TMDBID  int
+	Runtime int // minutes, from TMDB (0 = unknown); used to spot incomplete files
 
 	// File fields.
 	Ext      string // including leading dot, lowercased

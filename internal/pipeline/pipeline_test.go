@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"shelf/internal/config"
+	"shelf/internal/history"
 )
 
 func TestDuplicateContentGoesToReview(t *testing.T) {
@@ -164,4 +165,41 @@ rules: [{ watch: %s, output: %s }]
 			t.Error("expected both versions")
 		}
 	})
+}
+
+func TestReplacingDropsDownloadedSubtitles(t *testing.T) {
+	d := t.TempDir()
+	lib, in := filepath.Join(d, "lib"), filepath.Join(d, "in")
+	movie := filepath.Join(lib, "Movies/Heat (1995)")
+	put := func(path string, size int) {
+		os.MkdirAll(filepath.Dir(path), 0o755)
+		os.WriteFile(path, bytes.Repeat([]byte{7}, size), 0o644)
+	}
+	put(filepath.Join(movie, "Heat (1995).mkv"), 1000)
+	put(filepath.Join(movie, "Heat (1995).en.srt"), 10) // downloaded by shelf
+	put(filepath.Join(movie, "Heat (1995).fr.srt"), 10) // brought by the user
+	put(filepath.Join(in, "Heat.1995.mkv"), 3000)
+
+	cfg, err := config.Parse([]byte(fmt.Sprintf("probe: never\nconflict: overwrite\nhistory_file: %s/h.jsonl\nrules: [{ watch: %s, output: %s }]\n", d, in, lib)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := New(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), nil, false, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.Hist.Record(history.Entry{Action: "create", Src: "opensubtitles:1", Dst: filepath.Join(movie, "Heat (1995).en.srt")})
+
+	if err := p.Process(context.Background(), &cfg.Rules[0], filepath.Join(in, "Heat.1995.mkv"), in); err != nil {
+		t.Fatal(err)
+	}
+	if fi, err := os.Stat(filepath.Join(movie, "Heat (1995).mkv")); err != nil || fi.Size() != 3000 {
+		t.Fatal("new file not in place")
+	}
+	if _, err := os.Stat(filepath.Join(movie, "Heat (1995).en.srt")); !os.IsNotExist(err) {
+		t.Error("subtitle timed for the old file was kept")
+	}
+	if _, err := os.Stat(filepath.Join(movie, "Heat (1995).fr.srt")); err != nil {
+		t.Error("user's own subtitle was removed")
+	}
 }

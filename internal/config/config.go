@@ -105,6 +105,10 @@ type Rule struct {
 	// a video with identical content (e.g. a download helper that saved the
 	// same stream under several episode names).
 	CheckDuplicates *bool `yaml:"check_duplicates"`
+	// CheckComplete sends a file to review when it looks like an aborted
+	// download: its video stops well before the length its header claims,
+	// or it is far shorter than TMDB's runtime. Needs ffprobe.
+	CheckComplete *bool `yaml:"check_complete"`
 
 	renderer *naming.Renderer
 }
@@ -112,10 +116,11 @@ type Rule struct {
 // Renderer returns the rule's compiled templates (set by Validate).
 func (r *Rule) Renderer() *naming.Renderer { return r.renderer }
 
-func (r *Rule) IsRecursive() bool     { return r.Recursive == nil || *r.Recursive }
-func (r *Rule) WantSubtitles() bool   { return r.Subtitles == nil || *r.Subtitles }
-func (r *Rule) WantCleanupDirs() bool { return r.CleanupEmptyDirs == nil || *r.CleanupEmptyDirs }
-func (r *Rule) WantDupeCheck() bool   { return r.CheckDuplicates == nil || *r.CheckDuplicates }
+func (r *Rule) IsRecursive() bool       { return r.Recursive == nil || *r.Recursive }
+func (r *Rule) WantSubtitles() bool     { return r.Subtitles == nil || *r.Subtitles }
+func (r *Rule) WantCleanupDirs() bool   { return r.CleanupEmptyDirs == nil || *r.CleanupEmptyDirs }
+func (r *Rule) WantDupeCheck() bool     { return r.CheckDuplicates == nil || *r.CheckDuplicates }
+func (r *Rule) WantCompleteCheck() bool { return r.CheckComplete == nil || *r.CheckComplete }
 
 // MatchesExt reports whether a file extension (with dot) is handled by the rule.
 func (r *Rule) MatchesExt(ext string) bool {

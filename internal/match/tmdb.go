@@ -56,6 +56,7 @@ type movieResult struct {
 	OriginalTitle string  `json:"original_title"`
 	ReleaseDate   string  `json:"release_date"`
 	Popularity    float64 `json:"popularity"`
+	Runtime       int     `json:"runtime"` // details endpoint only
 }
 
 type tvResult struct {
@@ -71,6 +72,7 @@ type season struct {
 		EpisodeNumber int    `json:"episode_number"`
 		Name          string `json:"name"`
 		AirDate       string `json:"air_date"`
+		Runtime       int    `json:"runtime"`
 	} `json:"episodes"`
 }
 
@@ -117,7 +119,7 @@ func (c *Client) enrichMovie(ctx context.Context, m *media.Media) (*Candidate, e
 		var r movieResult
 		err := c.get(ctx, fmt.Sprintf("/movie/%d", m.TMDBID), nil, &r)
 		if err == nil && r.ID != 0 {
-			m.Title = r.Title
+			m.Title, m.Runtime = r.Title, r.Runtime
 			if y := yearOf(r.ReleaseDate); y != 0 {
 				m.Year = y
 			}
@@ -165,6 +167,11 @@ func (c *Client) enrichMovie(ctx context.Context, m *media.Media) (*Candidate, e
 	m.Title, m.TMDBID = best.Title, best.ID
 	if best.Year != 0 {
 		m.Year = best.Year
+	}
+	// Runtime is only in the details (cached like everything else); best effort.
+	var d movieResult
+	if c.get(ctx, fmt.Sprintf("/movie/%d", best.ID), nil, &d) == nil {
+		m.Runtime = d.Runtime
 	}
 	return best, nil
 }
@@ -232,6 +239,9 @@ func (c *Client) applyShow(ctx context.Context, m *media.Media, best *Candidate)
 		for _, e := range s.Episodes {
 			if e.EpisodeNumber == m.Episode && e.Name != "" {
 				m.EpisodeTitle = strings.TrimSpace(e.Name)
+				if m.LastEpisode() == m.Episode {
+					m.Runtime = e.Runtime
+				}
 				if m.LastEpisode() != m.Episode {
 					m.EpisodeTitle = stripPartSuffix(m.EpisodeTitle)
 				}

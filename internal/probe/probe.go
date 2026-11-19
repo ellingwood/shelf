@@ -244,3 +244,28 @@ func SubtitleLanguages(ctx context.Context, path string) ([]string, error) {
 	}
 	return langs, nil
 }
+
+// Durations returns how long the container says the file is and how far
+// its video actually goes (the last video packet near the end). A
+// truncated download keeps the full declared duration in its header but
+// its packets stop early. actual is 0 if it can't be determined.
+func Durations(ctx context.Context, path string) (declared, actual float64, err error) {
+	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, Bin, "-v", "quiet", "-show_entries", "format=duration",
+		"-of", "csv=p=0", path).Output()
+	if err != nil {
+		return 0, 0, fmt.Errorf("ffprobe cannot read the file (%v)", err)
+	}
+	declared, _ = strconv.ParseFloat(strings.TrimSpace(string(out)), 64)
+
+	// Seeking far past the end lands on the last reachable keyframe.
+	out, _ = exec.CommandContext(ctx, Bin, "-v", "quiet", "-select_streams", "v:0",
+		"-read_intervals", "999999%+#50", "-show_entries", "packet=pts_time", "-of", "csv=p=0", path).Output()
+	for _, line := range strings.Fields(string(out)) {
+		if t, err := strconv.ParseFloat(strings.TrimSuffix(line, ","), 64); err == nil && t > actual {
+			actual = t
+		}
+	}
+	return declared, actual, nil
+}

@@ -23,6 +23,10 @@ type Fetcher struct {
 	Sync   *Syncer // nil: no re-timing
 	Log    *slog.Logger
 	Probe  bool // check embedded subtitle tracks too
+	// CacheDir keeps raw downloads by OpenSubtitles file ID, so fetching
+	// again for a replaced video re-times the cached copy instead of using
+	// quota. Empty disables the cache.
+	CacheDir string
 	// OnCreate is called for each subtitle file written.
 	OnCreate func(job Job, path string, sub Subtitle)
 
@@ -53,13 +57,15 @@ type Options struct {
 	DryRun    bool     // search and choose, don't download
 }
 
-func New(cfg config.SubtitleDownload, ffprobe string, log *slog.Logger) *Fetcher {
+func New(cfg config.SubtitleDownload, ffprobe, cacheDir string, log *slog.Logger) *Fetcher {
 	f := &Fetcher{
-		Client: NewClient(cfg.OpenSubtitles.APIKey, cfg.OpenSubtitles.Username, cfg.OpenSubtitles.Password),
-		Cfg:    cfg,
-		Log:    log,
-		Probe:  probe.Available(),
+		Client:   NewClient(cfg.OpenSubtitles.APIKey, cfg.OpenSubtitles.Username, cfg.OpenSubtitles.Password),
+		Cfg:      cfg,
+		Log:      log,
+		Probe:    probe.Available(),
+		CacheDir: cacheDir,
 	}
+	f.pruneCache(180 * 24 * time.Hour)
 	if cfg.Sync != "never" {
 		if bin := FindFFsubsync(cfg.FFsubsync); bin != "" {
 			f.Sync = &Syncer{Bin: bin, FFmpegDir: FFmpegDirFor(ffprobe)}
@@ -178,7 +184,7 @@ func (f *Fetcher) destination(video, lang string, s Subtitle) string {
 
 // place downloads, optionally re-times, and moves the subtitle into place.
 func (f *Fetcher) place(ctx context.Context, job Job, r *Result, force bool) error {
-	data, err := f.Client.Download(ctx, r.Sub.FileID)
+	data, err := f.download(ctx, r.Sub.FileID)
 	if err != nil {
 		return err
 	}
@@ -221,6 +227,41 @@ func (f *Fetcher) place(ctx context.Context, job Job, r *Result, force bool) err
 	}
 	r.Path = res.Dst
 	return nil
+}
+
+// download returns a subtitle's raw content, from the cache when possible.
+func (f *Fetcher) download(ctx context.Context, fileID int) ([]byte, error) {
+	cached := ""
+	if f.CacheDir != "" {
+		cached = filepath.Join(f.CacheDir, fmt.Sprintf("%d.srt", fileID))
+		if data, err := os.ReadFile(cached); err == nil && len(data) > 0 {
+			now := time.Now()
+			os.Chtimes(cached, now, now) // keep recently used entries
+			return data, nil
+		}
+	}
+	data, err := f.Client.Download(ctx, fileID)
+	if err != nil {
+		return nil, err
+	}
+	if cached != "" && os.MkdirAll(f.CacheDir, 0o755) == nil {
+		if err := os.WriteFile(cached, data, 0o644); err != nil {
+			f.Log.Debug("subtitle cache write failed", "err", err)
+		}
+	}
+	return data, nil
+}
+
+func (f *Fetcher) pruneCache(maxAge time.Duration) {
+	if f.CacheDir == "" {
+		return
+	}
+	entries, _ := os.ReadDir(f.CacheDir)
+	for _, e := range entries {
+		if fi, err := e.Info(); err == nil && time.Since(fi.ModTime()) > maxAge {
+			os.Remove(filepath.Join(f.CacheDir, e.Name()))
+		}
+	}
 }
 
 // Start runs a background worker for Submit. It waits out quota resets.
