@@ -23,10 +23,13 @@ type marker struct {
 var (
 	reSeparators = regexp.MustCompile(`[._]+`)
 	reSpaces     = regexp.MustCompile(`\s+`)
-	reLeadGroup  = regexp.MustCompile(`^\s*[\[{【][^\]}】]*[\]}】]\s*`)
-	reBrackets   = regexp.MustCompile(`[\[\](){}]`)
-	reWebsite    = regexp.MustCompile(`(?i)^\s*www\s[a-z0-9-]+\s(com|org|net|to|mx|ag|io|me|tv)\s+-?\s*`)
-	reSeasonDir  = regexp.MustCompile(`^(season|series|s)\s?\d{1,2}$`)
+	// Dots followed by a space are punctuation ("Coyote vs. Acme",
+	// "Mr. Robot"), not release-name separators.
+	rePunctDots = regexp.MustCompile(`\.+\s`)
+	reLeadGroup = regexp.MustCompile(`^\s*[\[{【][^\]}】]*[\]}】]\s*`)
+	reBrackets  = regexp.MustCompile(`[\[\](){}]`)
+	reWebsite   = regexp.MustCompile(`(?i)^\s*www\s[a-z0-9-]+\s(com|org|net|to|mx|ag|io|me|tv)\s+-?\s*`)
+	reSeasonDir = regexp.MustCompile(`^(season|series|s)\s?\d{1,2}$`)
 
 	// Episode patterns, tried in order.
 	reSxxEyy  = regexp.MustCompile(`(?i)\bs(\d{1,2})\s?e(\d{1,3})((?:\s?-?\s?e\d{1,3}|-\d{1,3}\b)*)`)
@@ -385,7 +388,9 @@ func normalize(s string) string {
 	if stripped := reDomain.ReplaceAllString(s, "${1} ${2}"); strings.Trim(stripped, " -_[](){}") != "" {
 		s = stripped
 	}
+	s = rePunctDots.ReplaceAllStringFunc(s, func(m string) string { return strings.Repeat("\x00", len(m)-1) + " " })
 	s = reSeparators.ReplaceAllString(s, " ")
+	s = strings.ReplaceAll(s, "\x00", ".")
 	s = reBrackets.ReplaceAllString(s, " ")
 	s = reWebsite.ReplaceAllString(s, "")
 	return strings.TrimSpace(reSpaces.ReplaceAllString(s, " "))

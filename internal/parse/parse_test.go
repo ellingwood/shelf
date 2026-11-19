@@ -17,6 +17,8 @@ func TestName(t *testing.T) {
 		{"2001.A.Space.Odyssey.1968.1080p.mkv", media.Media{Kind: media.Movie, Title: "2001 A Space Odyssey", Year: 1968, Resolution: "1080p"}},
 		{"1917 (2019) [1080p].mp4", media.Media{Kind: media.Movie, Title: "1917", Year: 2019, Resolution: "1080p"}},
 		{"Charlotte's Web (2006).mkv", media.Media{Kind: media.Movie, Title: "Charlotte's Web", Year: 2006}},
+		{"Coyote vs. Acme (2026).mp4", media.Media{Kind: media.Movie, Title: "Coyote vs. Acme", Year: 2026}},
+		{"Mr. Smith Goes to Washington 1939 1080p DD5.1.mkv", media.Media{Kind: media.Movie, Title: "Mr. Smith Goes to Washington", Year: 1939, Resolution: "1080p", AudioCodec: "AC3"}},
 		{"Back to the Future 1985 720p WEB-DL.mkv", media.Media{Kind: media.Movie, Title: "Back to the Future", Year: 1985, Resolution: "720p", Source: "WEB-DL"}},
 		{"Heat.1995.Directors.Cut.1080p.BluRay.DTS.x264.mkv", media.Media{Kind: media.Movie, Title: "Heat", Year: 1995, Edition: "Director's Cut", Resolution: "1080p", Source: "BluRay", AudioCodec: "DTS", VideoCodec: "x264"}},
 		{"[YTS.MX] Parasite (2019) [1080p].mp4", media.Media{Kind: media.Movie, Title: "Parasite", Year: 2019, Resolution: "1080p"}},
