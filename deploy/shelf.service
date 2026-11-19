@@ -10,7 +10,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 EnvironmentFile=-%h/.config/shelf/env
-ExecStart=%h/go/bin/shelf watch
+ExecStart=%h/.local/bin/shelf watch
 Restart=on-failure
 RestartSec=10
 Nice=10

@@ -49,10 +49,10 @@ findmnt /mnt/media                        # should print the mount
 ```sh
 cd ~/dev/shelf
 make test        # optional: run the test suite
-make install     # builds and installs to ~/go/bin/shelf
+make install     # builds and installs to ~/.local/bin/shelf
 ```
 
-Make sure `~/go/bin` is on your `PATH` (`export PATH="$HOME/go/bin:$PATH"` in `~/.zshrc` or `~/.bashrc`), then check with `shelf help`.
+The binary always goes to `~/.local/bin`, whatever `GOBIN`/`GOPATH` say (Go version managers like mise point `GOBIN` at a per-version folder that disappears on upgrade). The systemd unit runs it from there. Make sure `~/.local/bin` is on your `PATH` (`export PATH="$HOME/.local/bin:$PATH"` in `~/.zshrc` or `~/.bashrc`), then check with `shelf help`. To install elsewhere: `make install BINDIR=/some/dir`, and update `ExecStart` in the unit to match.
 
 ---
 
@@ -232,6 +232,7 @@ jellyfin:
 
 | Symptom | Fix |
 |---|---|
+| Service loops with `status=203/EXEC` / `Unable to locate executable` | The binary isn't where the unit expects: run `make install` (installs to `~/.local/bin/shelf`), then `make install-service`. |
 | Nothing happens when a file arrives | `make logs`. Is the extension listed? Is the file above `min_size` and not matching `ignore`? Run with `-v` to see `pending` events. |
 | `output dir … does not exist — is the drive mounted?` | `findmnt /mnt/media`; `sudo mount -a`. |
 | Service won't start after boot | Usually the drive isn't mounted yet (by design with `RequiresMountsFor`). `systemctl --user status shelf`. |

@@ -22,7 +22,7 @@ in/Breaking Bad Season 1/Breaking.Bad.S01E02.720p.mkv
 ## Quick start
 
 ```sh
-make install                 # → ~/go/bin/shelf
+make install                 # → ~/.local/bin/shelf
 shelf init                   # writes ~/.config/shelf/config.yaml
 $EDITOR ~/.config/shelf/config.yaml     # set watch/output paths
 cat > ~/.config/shelf/env <<EOF         # secrets, chmod 600
